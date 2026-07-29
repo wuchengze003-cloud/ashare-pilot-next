@@ -1,0 +1,12 @@
+{
+  "contract_id": "champion",
+  "schema_version": "1.0.0",
+  "strategy_id": "fixture-reference",
+  "strategy_version": "v1",
+  "adapter_id": "fixture-reference-adapter/v1",
+  "promoted_at": "2026-07-29T07:59:00Z",
+  "code_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "config_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "dataset_id": "fixture-daily-2026-07-29-b9591a573343",
+  "promotion_report_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+}

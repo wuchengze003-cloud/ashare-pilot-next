@@ -73,15 +73,24 @@ class SignalInputs:
     previous_signal: Mapping[str, Any] | None = None
 
 
-def canonical_signal_sha256(document: Mapping[str, Any]) -> str:
-    """Hash a signal using one stable JSON representation."""
-    encoded = json.dumps(
+def canonical_json_bytes(document: Mapping[str, Any]) -> bytes:
+    """Serialize a JSON object using one stable representation."""
+    return json.dumps(
         document,
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
-    return hashlib.sha256(encoded).hexdigest()
+
+
+def canonical_json_sha256(document: Mapping[str, Any]) -> str:
+    """Hash a JSON object using its stable representation."""
+    return hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+
+
+def canonical_signal_sha256(document: Mapping[str, Any]) -> str:
+    """Backward-compatible signal-specific alias for the canonical JSON hash."""
+    return canonical_json_sha256(document)
 
 
 def _positions_from_document(document: Mapping[str, Any]) -> tuple[TargetPosition, ...]:
