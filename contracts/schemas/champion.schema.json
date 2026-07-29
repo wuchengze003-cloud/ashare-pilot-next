@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.ashare-pilot.local/champion/1.0.0",
+  "$id": "https://contracts.ashare-pilot.local/champion/2.0.0",
   "title": "Champion",
   "type": "object",
   "additionalProperties": false,
@@ -10,22 +10,53 @@
     "strategy_id",
     "strategy_version",
     "adapter_id",
+    "adapter_sha256",
     "promoted_at",
-    "code_sha256",
-    "config_sha256",
     "dataset_id",
+    "promotion_contract_set",
     "promotion_report_sha256"
   ],
   "properties": {
     "contract_id": {"const": "champion"},
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "strategy_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
     "strategy_version": {"type": "string", "pattern": "^v[0-9]+(?:\\.[0-9]+){0,2}$"},
     "adapter_id": {"type": "string", "pattern": "^[a-z0-9-]+/v[0-9]+$"},
+    "adapter_sha256": {"$ref": "#/$defs/sha256"},
     "promoted_at": {"type": "string", "format": "date-time"},
-    "code_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-    "config_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "dataset_id": {"type": "string", "minLength": 3},
-    "promotion_report_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    "promotion_contract_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_manifest_sha256",
+        "universe_sha256",
+        "cost_model_sha256",
+        "market_rules_sha256",
+        "execution_policy_sha256",
+        "portfolio_risk_sha256",
+        "code_sha256",
+        "config_sha256",
+        "lockfile_sha256"
+      ],
+      "properties": {
+        "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "universe_sha256": {"$ref": "#/$defs/sha256"},
+        "cost_model_sha256": {"$ref": "#/$defs/sha256"},
+        "market_rules_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_policy_sha256": {"$ref": "#/$defs/sha256"},
+        "portfolio_risk_sha256": {"$ref": "#/$defs/sha256"},
+        "code_sha256": {"$ref": "#/$defs/sha256"},
+        "config_sha256": {"$ref": "#/$defs/sha256"},
+        "lockfile_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "promotion_report_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
   }
 }

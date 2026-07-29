@@ -1,12 +1,22 @@
 {
   "contract_id": "champion",
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "strategy_id": "fixture-reference",
   "strategy_version": "v1",
   "adapter_id": "fixture-reference-adapter/v1",
+  "adapter_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "promoted_at": "2026-07-29T07:59:00Z",
-  "code_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "config_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "dataset_id": "fixture-daily-2026-07-29-b9591a573343",
+  "promotion_contract_set": {
+    "dataset_manifest_sha256": "28d8439ab1984a8d316e75fdba294239d11e0bfa4c7857e996df02b803e104eb",
+    "universe_sha256": "0ee2dd296a225a054ee2382ae44d816fc82ed9a1bfd4a374c8108687545d30cf",
+    "cost_model_sha256": "06fe9101e0e300f3da939d1180e975b6afa7da4a7803e4e124d7ad645dd8240e",
+    "market_rules_sha256": "28672e83f2aded869b4b3d196602458eab364b8d6e656b602d00752f591388fa",
+    "execution_policy_sha256": "e4fa6bc36b3eeb665421f1fbad061e48fb5d03bee020280aa9d59b27e38b0a32",
+    "portfolio_risk_sha256": "26b08e059e67a60202783186d107c8e72339028c744c8697c2d1efbc5925451e",
+    "code_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "config_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "lockfile_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
   "promotion_report_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 }
