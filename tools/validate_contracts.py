@@ -26,6 +26,60 @@ def parse_datetime(value: str) -> datetime:
 
 
 def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -> None:
+    if contract_id == "cost-model":
+        source_ids = [source["source_id"] for source in document["sources"]]
+        if len(source_ids) != len(set(source_ids)):
+            raise ValueError(f"{path}: duplicate cost source_id")
+        known_source_ids = set(source_ids)
+
+        segment_ids: set[str] = set()
+        by_market: dict[str, list[tuple[date, date | None, str]]] = {}
+        for segment in document["segments"]:
+            segment_id = segment["segment_id"]
+            if segment_id in segment_ids:
+                raise ValueError(f"{path}: duplicate cost segment_id {segment_id}")
+            segment_ids.add(segment_id)
+
+            effective_from = parse_date(segment["effective_from"])
+            effective_to = (
+                parse_date(segment["effective_to"]) if segment["effective_to"] else None
+            )
+            if effective_to is not None and effective_from > effective_to:
+                raise ValueError(f"{path}: cost segment {segment_id} ends before it starts")
+
+            unknown_sources = sorted(set(segment["source_ids"]) - known_source_ids)
+            if unknown_sources:
+                raise ValueError(
+                    f"{path}: cost segment {segment_id} has unknown sources "
+                    f"{unknown_sources}"
+                )
+            for market in segment["markets"]:
+                by_market.setdefault(market, []).append(
+                    (effective_from, effective_to, segment_id)
+                )
+
+        for market, periods in by_market.items():
+            ordered = sorted(periods, key=lambda period: (period[0], period[2]))
+            for index, (_effective_from, effective_to, segment_id) in enumerate(ordered):
+                is_last = index == len(ordered) - 1
+                if effective_to is None and not is_last:
+                    raise ValueError(
+                        f"{path}: open-ended cost segment {segment_id} is not last "
+                        f"for {market}"
+                    )
+                if is_last:
+                    if effective_to is not None:
+                        raise ValueError(
+                            f"{path}: last cost segment for {market} must be open-ended"
+                        )
+                    continue
+                next_from = ordered[index + 1][0]
+                if effective_to is None or effective_to.toordinal() + 1 != next_from.toordinal():
+                    raise ValueError(
+                        f"{path}: cost segments for {market} must be contiguous "
+                        "and non-overlapping"
+                    )
+
     if contract_id == "universe":
         as_of = parse_date(document["as_of"])
         symbols: set[str] = set()

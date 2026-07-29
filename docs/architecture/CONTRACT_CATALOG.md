@@ -6,7 +6,7 @@
 |---|---|---|---|
 | Dataset Manifest | Data Gateway | Research、Signal Runner | 不读取数据集 |
 | Universe | Data Gateway/受控成员任务 | Research、Signal Runner | 阻断候选或推理 |
-| Cost Model | 架构负责人 | quant_core | 阻断回测和推理 |
+| Cost Model | 架构负责人 | quant_core | 无唯一日期/市场费率段时阻断回测和推理 |
 | Market Rules | 架构负责人 | quant_core | 阻断相关证券 |
 | Execution Policy | 架构负责人 | quant_core | 阻断回测和目标生成 |
 | Portfolio Risk | 风险负责人 | quant_core、Signal Runner | 阻断目标发布 |
@@ -25,6 +25,16 @@
 - `HOLD`目标必须与上一有效目标相同。
 - `REDUCE_ONLY`不得新增证券，也不得提高任何证券目标权重。
 - Signal Runner构建完成后必须再次通过正式JSON Schema，验证失败不得发布。
+
+## Cost Model 2.0
+
+- 券商佣金是账户级假设；监管费用必须引用公开依据。
+- 每次计算显式传入交易日期、市场和买卖方向。
+- 印花税和过户费按日期段、方向分别计算，逐项按合同规则取整后再求和。
+- 同一市场的日期段必须连续、不重叠，最后一段必须开放；找不到唯一费率段时失败关闭。
+- 滑点和市场冲击属于Execution Policy，不得重复并入Cost Model。
+- 当前首个受支持日期为`2022-04-29`，首版市场为沪深A股；更早日期和北交所
+  在补齐经审核费率前不得回测。
 
 ## 版本规则
 
