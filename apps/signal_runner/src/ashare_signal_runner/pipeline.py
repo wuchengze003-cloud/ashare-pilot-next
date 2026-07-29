@@ -43,6 +43,14 @@ REQUIRED_INPUT_CONTRACTS = {
 }
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 GIT_SHA_PATTERN = re.compile(r"^[a-f0-9]{40}$")
+PROMOTION_CONTRACT_FIELDS = {
+    "cost-model": "cost_model_sha256",
+    "dataset-manifest": "dataset_manifest_sha256",
+    "execution-policy": "execution_policy_sha256",
+    "market-rules": "market_rules_sha256",
+    "portfolio-risk": "portfolio_risk_sha256",
+    "universe": "universe_sha256",
+}
 
 
 @dataclass(frozen=True)
@@ -132,6 +140,27 @@ def _validate_request_hashes(*, git_sha: str, lockfile_sha256: str) -> None:
         raise ValueError("lockfile_sha256 must be a lowercase SHA-256")
 
 
+def _verify_champion_bindings(
+    *,
+    champion: Mapping[str, Any],
+    contract_hashes: Mapping[str, str],
+    lockfile_sha256: str,
+    strategy: Strategy,
+) -> None:
+    promotion_contract_set = champion["promotion_contract_set"]
+    for contract_id, champion_field in PROMOTION_CONTRACT_FIELDS.items():
+        if promotion_contract_set[champion_field] != contract_hashes[contract_id]:
+            raise ValueError(
+                f"champion {champion_field} does not match current {contract_id}"
+            )
+    if promotion_contract_set["lockfile_sha256"] != lockfile_sha256:
+        raise ValueError("champion lockfile_sha256 does not match current lockfile")
+    if champion["adapter_id"] != getattr(strategy, "adapter_id", None):
+        raise ValueError("champion adapter_id does not match strategy adapter")
+    if champion["adapter_sha256"] != getattr(strategy, "adapter_sha256", None):
+        raise ValueError("champion adapter_sha256 does not match strategy adapter")
+
+
 def build_active_run(
     *,
     strategy: Strategy,
@@ -164,6 +193,11 @@ def build_active_run(
     universe = documents["universe"]
     champion = documents["champion"]
     portfolio_risk = documents["portfolio-risk"]
+    contract_hashes = {
+        contract_id: canonical_json_sha256(document)
+        for contract_id, document in documents.items()
+        if contract_id in REQUIRED_INPUT_CONTRACTS
+    }
     if dataset_manifest["dataset_kind"] != "normalized":
         raise ValueError("production inference requires a normalized dataset")
     if dataset_manifest["quality_status"] != "pass":
@@ -180,18 +214,20 @@ def build_active_run(
         raise ValueError("champion strategy_id does not match strategy adapter")
     if champion["strategy_version"] != strategy.strategy_version:
         raise ValueError("champion strategy_version does not match strategy adapter")
+    _verify_champion_bindings(
+        champion=champion,
+        contract_hashes=contract_hashes,
+        lockfile_sha256=lockfile_sha256,
+        strategy=strategy,
+    )
     promoted_at = datetime.fromisoformat(str(champion["promoted_at"]).replace("Z", "+00:00"))
     if promoted_at > generated_at:
         raise ValueError("champion cannot be promoted after signal generation")
 
     _verify_dataset_files(dataset_manifest, dataset_root=dataset_root)
 
-    contract_hashes = {
-        contract_id: canonical_json_sha256(document)
-        for contract_id, document in documents.items()
-        if contract_id in REQUIRED_INPUT_CONTRACTS
-    }
     champion_hash = contract_hashes["champion"]
+    promotion_contract_set = champion["promotion_contract_set"]
     contract_set = ContractSet(
         dataset_sha256=contract_hashes["dataset-manifest"],
         universe_sha256=contract_hashes["universe"],
@@ -200,8 +236,8 @@ def build_active_run(
         market_rules_sha256=contract_hashes["market-rules"],
         execution_policy_sha256=contract_hashes["execution-policy"],
         portfolio_risk_sha256=contract_hashes["portfolio-risk"],
-        code_sha256=str(champion["code_sha256"]),
-        config_sha256=str(champion["config_sha256"]),
+        code_sha256=str(promotion_contract_set["code_sha256"]),
+        config_sha256=str(promotion_contract_set["config_sha256"]),
         lockfile_sha256=lockfile_sha256,
     )
 
