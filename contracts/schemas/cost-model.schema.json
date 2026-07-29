@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.ashare-pilot.local/cost-model/1.0.0",
+  "$id": "https://contracts.ashare-pilot.local/cost-model/2.0.0",
   "title": "A-share Cost Model",
   "type": "object",
   "additionalProperties": false,
@@ -8,24 +8,27 @@
     "contract_id",
     "schema_version",
     "model_id",
-    "effective_from",
     "currency",
-    "commission_rate",
-    "minimum_commission",
-    "stamp_duty_rate_sell",
-    "transfer_fee_rate",
-    "rounding"
+    "commission",
+    "rounding",
+    "sources",
+    "segments"
   ],
   "properties": {
     "contract_id": {"const": "cost-model"},
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "model_id": {"type": "string", "pattern": "^[a-z0-9-]+/v[0-9]+$"},
-    "effective_from": {"type": "string", "format": "date"},
     "currency": {"const": "CNY"},
-    "commission_rate": {"type": "number", "minimum": 0, "maximum": 0.01},
-    "minimum_commission": {"type": "number", "minimum": 0},
-    "stamp_duty_rate_sell": {"type": "number", "minimum": 0, "maximum": 0.01},
-    "transfer_fee_rate": {"type": "number", "minimum": 0, "maximum": 0.01},
+    "commission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rate", "minimum", "basis"],
+      "properties": {
+        "rate": {"type": "number", "minimum": 0, "maximum": 0.01},
+        "minimum": {"type": "number", "minimum": 0},
+        "basis": {"const": "BROKER_ACCOUNT_ASSUMPTION"}
+      }
+    },
     "rounding": {
       "type": "object",
       "additionalProperties": false,
@@ -34,6 +37,77 @@
         "scale": {"const": 2},
         "mode": {"const": "ROUND_HALF_UP"},
         "component_level": {"const": true}
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id", "authority", "title", "url"],
+        "properties": {
+          "source_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+          "authority": {"type": "string", "minLength": 1, "maxLength": 120},
+          "title": {"type": "string", "minLength": 1, "maxLength": 200},
+          "url": {"type": "string", "format": "uri"}
+        }
+      }
+    },
+    "segments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "segment_id",
+          "effective_from",
+          "effective_to",
+          "markets",
+          "stamp_duty_rate_buy",
+          "stamp_duty_rate_sell",
+          "transfer_fee_rate_buy",
+          "transfer_fee_rate_sell",
+          "source_ids"
+        ],
+        "properties": {
+          "segment_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+          "effective_from": {"type": "string", "format": "date"},
+          "effective_to": {"type": ["string", "null"], "format": "date"},
+          "markets": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"enum": ["SH", "SZ", "BJ"]}
+          },
+          "stamp_duty_rate_buy": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.01
+          },
+          "stamp_duty_rate_sell": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.01
+          },
+          "transfer_fee_rate_buy": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.01
+          },
+          "transfer_fee_rate_sell": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.01
+          },
+          "source_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[a-z0-9-]+$"}
+          }
+        }
       }
     }
   }

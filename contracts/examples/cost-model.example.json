@@ -1,16 +1,73 @@
 {
   "contract_id": "cost-model",
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "model_id": "fixture-a-share-cost/v1",
-  "effective_from": "2026-01-01",
   "currency": "CNY",
-  "commission_rate": 0.0003,
-  "minimum_commission": 5,
-  "stamp_duty_rate_sell": 0.0005,
-  "transfer_fee_rate": 0.00001,
+  "commission": {
+    "rate": 0.0003,
+    "minimum": 5,
+    "basis": "BROKER_ACCOUNT_ASSUMPTION"
+  },
   "rounding": {
     "scale": 2,
     "mode": "ROUND_HALF_UP",
     "component_level": true
-  }
+  },
+  "sources": [
+    {
+      "source_id": "stamp-duty-2008-rate",
+      "authority": "Ministry of Finance of the People's Republic of China",
+      "title": "Securities transaction stamp duty rate reduced to 0.1%",
+      "url": "https://www.mof.gov.cn/zhengwuxinxi/caizhengxinwen/200805/t20080519_29133.htm"
+    },
+    {
+      "source_id": "stamp-duty-2023-half",
+      "authority": "Ministry of Finance of the People's Republic of China",
+      "title": "Announcement on halving securities transaction stamp duty",
+      "url": "https://www.mof.gov.cn/jrttts/202308/t20230828_3904235.htm"
+    },
+    {
+      "source_id": "transfer-fee-2022-half",
+      "authority": "Wuhan Local Financial Supervision and Administration Bureau",
+      "title": "Stock transfer fee reduced to 0.01 per mille",
+      "url": "https://jrj.wuhan.gov.cn/ynzx_57/xwzx/202204/t20220429_1964160.shtml"
+    },
+    {
+      "source_id": "stamp-duty-unilateral",
+      "authority": "State Taxation Administration Tianjin Tax Service",
+      "title": "Securities transaction stamp duty changed to unilateral collection",
+      "url": "https://tianjin.chinatax.gov.cn/11200000000/0200/020004/20230829135314615.shtml"
+    }
+  ],
+  "segments": [
+    {
+      "segment_id": "sh-sz-2022-transfer-cut",
+      "effective_from": "2022-04-29",
+      "effective_to": "2023-08-27",
+      "markets": ["SH", "SZ"],
+      "stamp_duty_rate_buy": 0,
+      "stamp_duty_rate_sell": 0.001,
+      "transfer_fee_rate_buy": 0.00001,
+      "transfer_fee_rate_sell": 0.00001,
+      "source_ids": [
+        "stamp-duty-2008-rate",
+        "stamp-duty-unilateral",
+        "transfer-fee-2022-half"
+      ]
+    },
+    {
+      "segment_id": "sh-sz-2023-stamp-cut",
+      "effective_from": "2023-08-28",
+      "effective_to": null,
+      "markets": ["SH", "SZ"],
+      "stamp_duty_rate_buy": 0,
+      "stamp_duty_rate_sell": 0.0005,
+      "transfer_fee_rate_buy": 0.00001,
+      "transfer_fee_rate_sell": 0.00001,
+      "source_ids": [
+        "stamp-duty-2023-half",
+        "transfer-fee-2022-half"
+      ]
+    }
+  ]
 }

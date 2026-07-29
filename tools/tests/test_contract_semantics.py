@@ -1,3 +1,5 @@
+import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -5,6 +7,13 @@ import pytest
 from tools.validate_contracts import validate_semantics
 
 DOCUMENT = Path("synthetic-document.json")
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def cost_model() -> dict[str, object]:
+    return json.loads(
+        (ROOT / "contracts/examples/cost-model.example.json").read_text(encoding="utf-8")
+    )
 
 
 def contract_set(*, champion_sha256: str | None = None) -> dict[str, str | None]:
@@ -96,3 +105,44 @@ def test_experiment_windows_must_not_overlap() -> None:
 
     with pytest.raises(ValueError, match="ordered and disjoint"):
         validate_semantics("experiment-config", experiment, DOCUMENT)
+
+
+def test_cost_model_rejects_timeline_gap() -> None:
+    model = cost_model()
+    segments = model["segments"]
+    assert isinstance(segments, list)
+    segments[0]["effective_to"] = "2023-08-26"
+
+    with pytest.raises(ValueError, match="contiguous and non-overlapping"):
+        validate_semantics("cost-model", model, DOCUMENT)
+
+
+def test_cost_model_rejects_timeline_overlap() -> None:
+    model = cost_model()
+    segments = model["segments"]
+    assert isinstance(segments, list)
+    segments[1]["effective_from"] = "2023-08-27"
+
+    with pytest.raises(ValueError, match="contiguous and non-overlapping"):
+        validate_semantics("cost-model", model, DOCUMENT)
+
+
+def test_cost_model_rejects_unknown_source() -> None:
+    model = cost_model()
+    segments = model["segments"]
+    assert isinstance(segments, list)
+    segments[0]["source_ids"].append("missing-source")
+
+    with pytest.raises(ValueError, match="unknown sources"):
+        validate_semantics("cost-model", model, DOCUMENT)
+
+
+def test_cost_model_rejects_closed_final_segment() -> None:
+    model = cost_model()
+    closed_model = copy.deepcopy(model)
+    segments = closed_model["segments"]
+    assert isinstance(segments, list)
+    segments[-1]["effective_to"] = "2026-12-31"
+
+    with pytest.raises(ValueError, match="must be open-ended"):
+        validate_semantics("cost-model", closed_model, DOCUMENT)
