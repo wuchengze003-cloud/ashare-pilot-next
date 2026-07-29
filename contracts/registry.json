@@ -49,7 +49,12 @@
     {
       "contract_id": "production-signal",
       "schema": "schemas/production-signal.schema.json",
-      "examples": ["examples/production-signal.flat.example.json"]
+      "examples": [
+        "examples/production-signal.active.example.json",
+        "examples/production-signal.hold.example.json",
+        "examples/production-signal.reduce-only.example.json",
+        "examples/production-signal.flat.example.json"
+      ]
     },
     {
       "contract_id": "runtime-manifest",

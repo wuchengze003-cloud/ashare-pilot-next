@@ -1,0 +1,11 @@
+title = "ashare-pilot-next secret rules"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "tushare-token"
+description = "Tushare Pro token"
+regex = '''(?i)(?:tushare[_-]?token|ts[_-]?token)\s*[:=]\s*["']?([0-9a-f]{32,64})["']?'''
+secretGroup = 1
+keywords = ["tushare", "ts_token", "ts-token"]

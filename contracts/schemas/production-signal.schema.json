@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.ashare-pilot.local/production-signal/1.0.0",
+  "$id": "https://contracts.ashare-pilot.local/production-signal/2.0.0",
   "title": "Production Signal",
   "type": "object",
   "additionalProperties": false,
@@ -13,13 +13,14 @@
     "latest_complete_date",
     "generated_at",
     "champion",
+    "previous_signal_sha256",
     "target_positions",
     "reason_codes",
-    "input_hashes"
+    "contract_set"
   ],
   "properties": {
     "contract_id": {"const": "production-signal"},
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "signal_id": {"type": "string", "minLength": 3, "maxLength": 160},
     "state": {"enum": ["ACTIVE", "HOLD", "REDUCE_ONLY", "FLAT"]},
     "as_of": {"type": "string", "format": "date"},
@@ -41,8 +42,10 @@
       ]
     },
     "previous_signal_sha256": {
-      "type": ["string", "null"],
-      "pattern": "^[a-f0-9]{64}$"
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/sha256"}
+      ]
     },
     "target_positions": {
       "type": "array",
@@ -63,13 +66,90 @@
       "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"},
       "uniqueItems": true
     },
-    "input_hashes": {
+    "contract_set": {
       "type": "object",
-      "minProperties": 1,
-      "additionalProperties": {
-        "type": "string",
-        "pattern": "^[a-f0-9]{64}$"
+      "additionalProperties": false,
+      "required": [
+        "dataset_sha256",
+        "universe_sha256",
+        "champion_sha256",
+        "cost_model_sha256",
+        "market_rules_sha256",
+        "execution_policy_sha256",
+        "portfolio_risk_sha256",
+        "code_sha256",
+        "config_sha256",
+        "lockfile_sha256"
+      ],
+      "properties": {
+        "dataset_sha256": {"$ref": "#/$defs/sha256"},
+        "universe_sha256": {"$ref": "#/$defs/sha256"},
+        "champion_sha256": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/sha256"}
+          ]
+        },
+        "cost_model_sha256": {"$ref": "#/$defs/sha256"},
+        "market_rules_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_policy_sha256": {"$ref": "#/$defs/sha256"},
+        "portfolio_risk_sha256": {"$ref": "#/$defs/sha256"},
+        "code_sha256": {"$ref": "#/$defs/sha256"},
+        "config_sha256": {"$ref": "#/$defs/sha256"},
+        "lockfile_sha256": {"$ref": "#/$defs/sha256"}
       }
     }
-  }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {"enum": ["HOLD", "REDUCE_ONLY"]}
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "previous_signal_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {"const": "ACTIVE"}
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "champion": {"type": "object"},
+          "contract_set": {
+            "properties": {
+              "champion_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {"const": "FLAT"}
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "target_positions": {"maxItems": 0}
+        }
+      }
+    }
+  ]
 }
