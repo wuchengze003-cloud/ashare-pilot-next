@@ -26,6 +26,9 @@ architecture documents, not in this file.
 11. Agents may edit only explicitly allowed paths. Prompts are not security
     boundaries.
 12. Never reset, clean, stash, overwrite, or merge unrelated user or agent work.
+13. `main` changes only through a pull request with required architecture and
+    secret checks. Direct pushes, force pushes, deletion, and admin bypass are
+    forbidden by repository protection.
 
 ## Change Classes
 

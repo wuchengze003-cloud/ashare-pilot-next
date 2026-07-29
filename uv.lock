@@ -72,10 +72,14 @@ version = "0.1.0"
 source = { editable = "apps/signal_runner" }
 dependencies = [
     { name = "ashare-quant-core" },
+    { name = "jsonschema", extra = ["format"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "ashare-quant-core", editable = "packages/quant_core" }]
+requires-dist = [
+    { name = "ashare-quant-core", editable = "packages/quant_core" },
+    { name = "jsonschema", extras = ["format"], specifier = ">=4.25,<5" },
+]
 
 [[package]]
 name = "attrs"

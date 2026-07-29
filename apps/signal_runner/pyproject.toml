@@ -3,7 +3,10 @@ name = "ashare-signal-runner"
 version = "0.1.0"
 description = "Deterministic production target publisher"
 requires-python = ">=3.11"
-dependencies = ["ashare-quant-core"]
+dependencies = [
+  "ashare-quant-core",
+  "jsonschema[format]>=4.25,<5"
+]
 
 [tool.uv.sources]
 ashare-quant-core = {workspace = true}

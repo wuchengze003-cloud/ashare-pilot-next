@@ -1,5 +1,19 @@
 """Deterministic production target publisher."""
 
-from .runner import SignalInputs, build_safe_signal
+from .runner import (
+    ChampionRef,
+    ContractSet,
+    SignalInputs,
+    build_initial_flat_signal,
+    build_production_signal,
+    canonical_signal_sha256,
+)
 
-__all__ = ["SignalInputs", "build_safe_signal"]
+__all__ = [
+    "ChampionRef",
+    "ContractSet",
+    "SignalInputs",
+    "build_initial_flat_signal",
+    "build_production_signal",
+    "canonical_signal_sha256",
+]

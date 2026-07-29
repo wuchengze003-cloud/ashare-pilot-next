@@ -1,19 +1,25 @@
 {
   "contract_id": "production-signal",
   "schema_version": "2.0.0",
-  "signal_id": "fixture-flat-2026-07-29",
-  "state": "FLAT",
+  "signal_id": "fixture-hold-2026-07-29",
+  "state": "HOLD",
   "as_of": "2026-07-29",
-  "latest_complete_date": "2026-07-29",
+  "latest_complete_date": "2026-07-28",
   "generated_at": "2026-07-29T08:10:00Z",
-  "champion": null,
-  "previous_signal_sha256": null,
-  "target_positions": [],
-  "reason_codes": ["NO_CHAMPION"],
+  "champion": {
+    "strategy_id": "fixture-reference",
+    "strategy_version": "v1",
+    "sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "previous_signal_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "target_positions": [
+    {"symbol": "600000.SH", "target_weight": 0.2}
+  ],
+  "reason_codes": ["DECISION_DATA_INVALID"],
   "contract_set": {
     "dataset_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "universe_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "champion_sha256": null,
+    "champion_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
     "cost_model_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "market_rules_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "execution_policy_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",

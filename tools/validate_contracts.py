@@ -54,17 +54,30 @@ def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -
     if contract_id == "production-signal":
         state = document["state"]
         targets = document["target_positions"]
+        champion = document["champion"]
+        champion_hash = document["contract_set"]["champion_sha256"]
         symbols = [item["symbol"] for item in targets]
         if len(symbols) != len(set(symbols)):
             raise ValueError(f"{path}: duplicate target symbol")
         if sum(item["target_weight"] for item in targets) > 1 + 1e-12:
             raise ValueError(f"{path}: target weights exceed 100%")
-        if state == "FLAT" and any(item["target_weight"] != 0 for item in targets):
-            raise ValueError(f"{path}: FLAT requires zero target weights")
-        if state == "ACTIVE" and document["champion"] is None:
+        if parse_date(document["latest_complete_date"]) > parse_date(document["as_of"]):
+            raise ValueError(f"{path}: latest_complete_date cannot be later than as_of")
+        generated_at = parse_datetime(document["generated_at"])
+        if generated_at.tzinfo is None or generated_at.utcoffset() is None:
+            raise ValueError(f"{path}: generated_at must include a timezone")
+        if generated_at.utcoffset().total_seconds() != 0:
+            raise ValueError(f"{path}: generated_at must use UTC")
+        if state == "FLAT" and targets:
+            raise ValueError(f"{path}: FLAT requires an empty target")
+        if state == "ACTIVE" and champion is None:
             raise ValueError(f"{path}: ACTIVE requires a champion")
-        if state == "HOLD" and document["previous_signal_sha256"] is None:
-            raise ValueError(f"{path}: HOLD requires a previous signal")
+        if state in {"HOLD", "REDUCE_ONLY"} and document["previous_signal_sha256"] is None:
+            raise ValueError(f"{path}: {state} requires a previous signal")
+        if champion is None and champion_hash is not None:
+            raise ValueError(f"{path}: champion hash requires a champion")
+        if champion is not None and champion_hash != champion["sha256"]:
+            raise ValueError(f"{path}: champion hash does not match champion")
 
     if contract_id == "stage-health" and parse_datetime(
         document["started_at"]

@@ -17,6 +17,15 @@
 | Runtime Manifest | Signal Runner/Ops | Web、审计 | 不发布 |
 | Stage Health | 各阶段 | Ops、Web运维面 | 阻断后续阶段 |
 
+## Production Signal 2.0
+
+- 使用固定`contract_set`绑定数据、Universe、Champion、成本、市场规则、执行规则、
+  组合风险、代码、配置和锁文件哈希。
+- `HOLD`与`REDUCE_ONLY`必须引用并加载上一份完整信号。
+- `HOLD`目标必须与上一有效目标相同。
+- `REDUCE_ONLY`不得新增证券，也不得提高任何证券目标权重。
+- Signal Runner构建完成后必须再次通过正式JSON Schema，验证失败不得发布。
+
 ## 版本规则
 
 - 含义、单位或必填字段改变：主版本升级。
