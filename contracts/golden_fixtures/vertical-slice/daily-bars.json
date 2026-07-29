@@ -1,0 +1,22 @@
+[
+  {
+    "symbol": "000001.SZ",
+    "trade_date": "2026-07-28",
+    "close": 10.0
+  },
+  {
+    "symbol": "000001.SZ",
+    "trade_date": "2026-07-29",
+    "close": 10.5
+  },
+  {
+    "symbol": "600000.SH",
+    "trade_date": "2026-07-28",
+    "close": 12.0
+  },
+  {
+    "symbol": "600000.SH",
+    "trade_date": "2026-07-29",
+    "close": 13.2
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "contract_id": "dataset-manifest",
+  "schema_version": "1.0.0",
+  "dataset_id": "fixture-daily-2026-07-29-b9591a573343",
+  "dataset_kind": "normalized",
+  "as_of": "2026-07-29",
+  "generated_at": "2026-07-29T08:00:00Z",
+  "source": "synthetic-fixture",
+  "quality_status": "pass",
+  "quality_reasons": [],
+  "files": [
+    {
+      "path": "daily-bars.json",
+      "sha256": "b9591a573343ef5efd4e17e714beacf60a412c32ef746abf6289bd6f57bb3ef6",
+      "row_count": 4
+    }
+  ]
+}

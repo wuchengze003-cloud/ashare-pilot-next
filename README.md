@@ -7,6 +7,11 @@
 
 **架构骨架，不用于真实交易。**
 
+合成数据最小闭环已经验证到`Runtime Manifest`：输入文件内容、合同、Champion、
+成本、市场规则、执行规则、组合风险和锁文件均绑定哈希；Signal Runner在输出前
+执行点时Universe与组合约束，并以原子目录方式发布。测试专用参考策略只存在于
+测试代码，不属于正式策略，也不能参与晋级。
+
 首个里程碑只验证一条可复现的最小链路：
 
 ```text
@@ -14,7 +19,8 @@
   -> 点时Universe
   -> 参考策略协议
   -> 目标仓位
-  -> 不可变manifest
+  -> Production Signal
+  -> Runtime Manifest
   -> Web只读合同
 ```
 
