@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/experiment-config/1.0.0",
+  "title": "Experiment Config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "experiment_id",
+    "initial_capital",
+    "currency",
+    "dataset_id",
+    "universe_id",
+    "benchmark",
+    "random_seed",
+    "windows"
+  ],
+  "properties": {
+    "contract_id": {"const": "experiment-config"},
+    "schema_version": {"const": "1.0.0"},
+    "experiment_id": {"type": "string", "minLength": 3, "maxLength": 120},
+    "initial_capital": {"type": "number", "exclusiveMinimum": 0},
+    "currency": {"const": "CNY"},
+    "dataset_id": {"type": "string", "minLength": 3},
+    "universe_id": {"type": "string", "pattern": "^[a-z0-9-]+-pit/v[0-9]+$"},
+    "benchmark": {"type": "string", "minLength": 1},
+    "random_seed": {"type": "integer", "minimum": 0},
+    "windows": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["development", "validation", "final"],
+      "properties": {
+        "development": {"$ref": "#/$defs/window"},
+        "validation": {"$ref": "#/$defs/window"},
+        "final": {"$ref": "#/$defs/window"}
+      }
+    }
+  },
+  "$defs": {
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "string", "format": "date"},
+        "end": {"type": "string", "format": "date"}
+      }
+    }
+  }
+}

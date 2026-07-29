@@ -1,0 +1,10 @@
+{
+  "contract_id": "promotion-gate",
+  "schema_version": "1.0.0",
+  "gate_id": "fixture-promotion/v1",
+  "maximum_drawdown": 0.15,
+  "minimum_trades": 20,
+  "minimum_sharpe": 1,
+  "maximum_top_trade_profit_share": 0.35,
+  "require_untouched_final_window": true
+}

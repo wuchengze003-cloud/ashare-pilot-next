@@ -1,0 +1,16 @@
+{
+  "contract_id": "cost-model",
+  "schema_version": "1.0.0",
+  "model_id": "fixture-a-share-cost/v1",
+  "effective_from": "2026-01-01",
+  "currency": "CNY",
+  "commission_rate": 0.0003,
+  "minimum_commission": 5,
+  "stamp_duty_rate_sell": 0.0005,
+  "transfer_fee_rate": 0.00001,
+  "rounding": {
+    "scale": 2,
+    "mode": "ROUND_HALF_UP",
+    "component_level": true
+  }
+}

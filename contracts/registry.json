@@ -1,0 +1,65 @@
+{
+  "registry_version": "1.0.0",
+  "contracts": [
+    {
+      "contract_id": "dataset-manifest",
+      "schema": "schemas/dataset-manifest.schema.json",
+      "examples": ["examples/dataset-manifest.example.json"]
+    },
+    {
+      "contract_id": "universe",
+      "schema": "schemas/universe.schema.json",
+      "examples": ["examples/universe.example.json"]
+    },
+    {
+      "contract_id": "cost-model",
+      "schema": "schemas/cost-model.schema.json",
+      "examples": ["examples/cost-model.example.json"]
+    },
+    {
+      "contract_id": "market-rules",
+      "schema": "schemas/market-rules.schema.json",
+      "examples": ["examples/market-rules.example.json"]
+    },
+    {
+      "contract_id": "execution-policy",
+      "schema": "schemas/execution-policy.schema.json",
+      "examples": ["examples/execution-policy.example.json"]
+    },
+    {
+      "contract_id": "portfolio-risk",
+      "schema": "schemas/portfolio-risk.schema.json",
+      "examples": ["examples/portfolio-risk.example.json"]
+    },
+    {
+      "contract_id": "experiment-config",
+      "schema": "schemas/experiment-config.schema.json",
+      "examples": ["examples/experiment-config.example.json"]
+    },
+    {
+      "contract_id": "promotion-gate",
+      "schema": "schemas/promotion-gate.schema.json",
+      "examples": ["examples/promotion-gate.example.json"]
+    },
+    {
+      "contract_id": "champion",
+      "schema": "schemas/champion.schema.json",
+      "examples": ["examples/champion.example.json"]
+    },
+    {
+      "contract_id": "production-signal",
+      "schema": "schemas/production-signal.schema.json",
+      "examples": ["examples/production-signal.flat.example.json"]
+    },
+    {
+      "contract_id": "runtime-manifest",
+      "schema": "schemas/runtime-manifest.schema.json",
+      "examples": ["examples/runtime-manifest.example.json"]
+    },
+    {
+      "contract_id": "stage-health",
+      "schema": "schemas/stage-health.schema.json",
+      "examples": ["examples/stage-health.example.json"]
+    }
+  ]
+}

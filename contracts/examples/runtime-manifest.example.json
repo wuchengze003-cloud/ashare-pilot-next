@@ -1,0 +1,20 @@
+{
+  "contract_id": "runtime-manifest",
+  "schema_version": "1.0.0",
+  "run_id": "fixture-run-2026-07-29",
+  "git_sha": "1111111111111111111111111111111111111111",
+  "as_of": "2026-07-29",
+  "generated_at": "2026-07-29T08:10:01Z",
+  "inputs": [
+    {
+      "artifact_id": "dataset-manifest",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "outputs": [
+    {
+      "artifact_id": "production-signal",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ]
+}

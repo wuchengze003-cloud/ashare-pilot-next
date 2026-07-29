@@ -1,0 +1,13 @@
+[project]
+name = "ashare-research-app"
+version = "0.1.0"
+description = "Experiment, race, evaluation, and promotion application"
+requires-python = ">=3.11"
+dependencies = ["ashare-quant-core"]
+
+[tool.uv.sources]
+ashare-quant-core = {workspace = true}
+
+[build-system]
+requires = ["uv_build>=0.10.8,<0.11.0"]
+build-backend = "uv_build"

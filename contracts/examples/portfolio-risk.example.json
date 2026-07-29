@@ -1,0 +1,10 @@
+{
+  "contract_id": "portfolio-risk",
+  "schema_version": "1.0.0",
+  "risk_id": "fixture-long-only/v1",
+  "max_positions": 10,
+  "max_single_weight": 0.15,
+  "max_theme_weight": 0.4,
+  "max_gross_exposure": 1,
+  "rebalance_threshold": 0.01
+}

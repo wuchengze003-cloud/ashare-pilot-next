@@ -1,0 +1,13 @@
+{
+  "contract_id": "stage-health",
+  "schema_version": "1.0.0",
+  "run_id": "fixture-run-2026-07-29",
+  "stage": "signal",
+  "status": "pass",
+  "started_at": "2026-07-29T08:10:00Z",
+  "finished_at": "2026-07-29T08:10:01Z",
+  "dependency_hashes": {
+    "dataset": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "reason_codes": []
+}

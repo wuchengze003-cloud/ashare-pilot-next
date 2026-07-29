@@ -1,0 +1,26 @@
+{
+  "contract_id": "universe",
+  "schema_version": "1.0.0",
+  "universe_id": "fixture-csi800-pit/v1",
+  "as_of": "2026-07-29",
+  "generated_at": "2026-07-29T08:00:00Z",
+  "source": "synthetic-fixture",
+  "source_version": "fixture-v1",
+  "quality_status": "pass",
+  "members": [
+    {
+      "symbol": "000001.SZ",
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "eligible": true,
+      "reason_codes": ["BASE_MEMBER", "DATA_COMPLETE"]
+    },
+    {
+      "symbol": "600000.SH",
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "eligible": false,
+      "reason_codes": ["BASE_MEMBER", "SUSPENDED"]
+    }
+  ]
+}

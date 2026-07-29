@@ -1,0 +1,11 @@
+{
+  "contract_id": "execution-policy",
+  "schema_version": "1.0.0",
+  "policy_id": "fixture-next-open/v1",
+  "decision_timing": "daily_close",
+  "execution_timing": "next_open",
+  "slippage_bps": 10,
+  "impact_model": "linear_participation",
+  "maximum_participation_rate": 0.05,
+  "enforce_t_plus_one": true
+}

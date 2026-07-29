@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/cost-model/1.0.0",
+  "title": "A-share Cost Model",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "model_id",
+    "effective_from",
+    "currency",
+    "commission_rate",
+    "minimum_commission",
+    "stamp_duty_rate_sell",
+    "transfer_fee_rate",
+    "rounding"
+  ],
+  "properties": {
+    "contract_id": {"const": "cost-model"},
+    "schema_version": {"const": "1.0.0"},
+    "model_id": {"type": "string", "pattern": "^[a-z0-9-]+/v[0-9]+$"},
+    "effective_from": {"type": "string", "format": "date"},
+    "currency": {"const": "CNY"},
+    "commission_rate": {"type": "number", "minimum": 0, "maximum": 0.01},
+    "minimum_commission": {"type": "number", "minimum": 0},
+    "stamp_duty_rate_sell": {"type": "number", "minimum": 0, "maximum": 0.01},
+    "transfer_fee_rate": {"type": "number", "minimum": 0, "maximum": 0.01},
+    "rounding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scale", "mode", "component_level"],
+      "properties": {
+        "scale": {"const": 2},
+        "mode": {"const": "ROUND_HALF_UP"},
+        "component_level": {"const": true}
+      }
+    }
+  }
+}

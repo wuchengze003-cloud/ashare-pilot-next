@@ -1,0 +1,10 @@
+[project]
+name = "ashare-quant-core"
+version = "0.1.0"
+description = "Authoritative financial semantics for ashare-pilot-next"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.10.8,<0.11.0"]
+build-backend = "uv_build"

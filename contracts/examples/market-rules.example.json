@@ -1,0 +1,27 @@
+{
+  "contract_id": "market-rules",
+  "schema_version": "1.0.0",
+  "rules_id": "fixture-a-share-market/v1",
+  "segments": [
+    {
+      "segment_id": "main-normal",
+      "board": "main",
+      "security_status": "normal",
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "lot_size": 100,
+      "sell_t_plus": 1,
+      "price_limit_pct": 0.1
+    },
+    {
+      "segment_id": "gem-normal",
+      "board": "gem",
+      "security_status": "normal",
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "lot_size": 100,
+      "sell_t_plus": 1,
+      "price_limit_pct": 0.2
+    }
+  ]
+}

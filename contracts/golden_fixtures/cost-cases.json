@@ -1,0 +1,51 @@
+{
+  "fixture_version": "1.0.0",
+  "model": "../examples/cost-model.example.json",
+  "cases": [
+    {
+      "case_id": "small-buy-minimum-commission",
+      "side": "buy",
+      "gross_amount": 1000,
+      "expected_commission": 5,
+      "expected_stamp_duty": 0,
+      "expected_transfer_fee": 0.01,
+      "expected_total_cost": 5.01
+    },
+    {
+      "case_id": "small-sell-minimum-commission",
+      "side": "sell",
+      "gross_amount": 1000,
+      "expected_commission": 5,
+      "expected_stamp_duty": 0.5,
+      "expected_transfer_fee": 0.01,
+      "expected_total_cost": 5.51
+    },
+    {
+      "case_id": "large-buy-rate-commission",
+      "side": "buy",
+      "gross_amount": 100000,
+      "expected_commission": 30,
+      "expected_stamp_duty": 0,
+      "expected_transfer_fee": 1,
+      "expected_total_cost": 31
+    },
+    {
+      "case_id": "large-sell-all-components",
+      "side": "sell",
+      "gross_amount": 100000,
+      "expected_commission": 30,
+      "expected_stamp_duty": 50,
+      "expected_transfer_fee": 1,
+      "expected_total_cost": 81
+    },
+    {
+      "case_id": "component-rounding",
+      "side": "sell",
+      "gross_amount": 12345.67,
+      "expected_commission": 5,
+      "expected_stamp_duty": 6.17,
+      "expected_transfer_fee": 0.12,
+      "expected_total_cost": 11.29
+    }
+  ]
+}

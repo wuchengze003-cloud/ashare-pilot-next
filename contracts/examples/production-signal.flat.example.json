@@ -1,0 +1,17 @@
+{
+  "contract_id": "production-signal",
+  "schema_version": "1.0.0",
+  "signal_id": "fixture-flat-2026-07-29",
+  "state": "FLAT",
+  "as_of": "2026-07-29",
+  "latest_complete_date": "2026-07-29",
+  "generated_at": "2026-07-29T08:10:00Z",
+  "champion": null,
+  "previous_signal_sha256": null,
+  "target_positions": [],
+  "reason_codes": ["NO_CHAMPION"],
+  "input_hashes": {
+    "dataset": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "universe": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  }
+}

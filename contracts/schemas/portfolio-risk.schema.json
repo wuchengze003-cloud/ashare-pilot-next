@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/portfolio-risk/1.0.0",
+  "title": "Portfolio Risk",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "risk_id",
+    "max_positions",
+    "max_single_weight",
+    "max_gross_exposure",
+    "rebalance_threshold"
+  ],
+  "properties": {
+    "contract_id": {"const": "portfolio-risk"},
+    "schema_version": {"const": "1.0.0"},
+    "risk_id": {"type": "string", "pattern": "^[a-z0-9-]+/v[0-9]+$"},
+    "max_positions": {"type": "integer", "minimum": 1, "maximum": 500},
+    "max_single_weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+    "max_theme_weight": {"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1},
+    "max_gross_exposure": {"type": "number", "minimum": 0, "maximum": 1},
+    "rebalance_threshold": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "contract_id": "dataset-manifest",
+  "schema_version": "1.0.0",
+  "dataset_id": "fixture-daily-2026-07-29-aaaaaaaaaaaa",
+  "dataset_kind": "normalized",
+  "as_of": "2026-07-29",
+  "generated_at": "2026-07-29T08:00:00Z",
+  "source": "synthetic-fixture",
+  "quality_status": "pass",
+  "quality_reasons": [],
+  "files": [
+    {
+      "path": "daily/part-000.parquet",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "row_count": 4
+    }
+  ]
+}

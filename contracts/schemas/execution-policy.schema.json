@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/execution-policy/1.0.0",
+  "title": "Execution Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "policy_id",
+    "decision_timing",
+    "execution_timing",
+    "slippage_bps",
+    "impact_model",
+    "enforce_t_plus_one"
+  ],
+  "properties": {
+    "contract_id": {"const": "execution-policy"},
+    "schema_version": {"const": "1.0.0"},
+    "policy_id": {"type": "string", "pattern": "^[a-z0-9-]+/v[0-9]+$"},
+    "decision_timing": {"enum": ["daily_close", "intraday_bar_close"]},
+    "execution_timing": {"enum": ["next_open", "next_bar_open", "vwap_window"]},
+    "slippage_bps": {"type": "number", "minimum": 0, "maximum": 1000},
+    "impact_model": {"enum": ["none", "linear_participation"]},
+    "maximum_participation_rate": {
+      "type": ["number", "null"],
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
+    "enforce_t_plus_one": {"type": "boolean"}
+  }
+}

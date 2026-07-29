@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/stage-health/1.0.0",
+  "title": "Stage Health",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "run_id",
+    "stage",
+    "status",
+    "started_at",
+    "finished_at",
+    "dependency_hashes",
+    "reason_codes"
+  ],
+  "properties": {
+    "contract_id": {"const": "stage-health"},
+    "schema_version": {"const": "1.0.0"},
+    "run_id": {"type": "string", "minLength": 3, "maxLength": 160},
+    "stage": {"enum": ["data", "research", "signal", "web", "deploy"]},
+    "status": {"enum": ["pass", "fail", "blocked"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "dependency_hashes": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"},
+      "uniqueItems": true
+    }
+  }
+}

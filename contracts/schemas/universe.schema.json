@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/universe/1.0.0",
+  "title": "Point-in-time Universe",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "universe_id",
+    "as_of",
+    "generated_at",
+    "source",
+    "source_version",
+    "quality_status",
+    "members"
+  ],
+  "properties": {
+    "contract_id": {"const": "universe"},
+    "schema_version": {"const": "1.0.0"},
+    "universe_id": {"type": "string", "pattern": "^[a-z0-9-]+-pit/v[0-9]+$"},
+    "as_of": {"type": "string", "format": "date"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "source": {"type": "string", "minLength": 1, "maxLength": 80},
+    "source_version": {"type": "string", "minLength": 1, "maxLength": 80},
+    "quality_status": {"enum": ["pass", "fail"]},
+    "members": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["symbol", "valid_from", "eligible", "reason_codes"],
+        "properties": {
+          "symbol": {"type": "string", "pattern": "^[0-9]{6}\\.(SZ|SH|BJ)$"},
+          "valid_from": {"type": "string", "format": "date"},
+          "valid_to": {"type": ["string", "null"], "format": "date"},
+          "eligible": {"type": "boolean"},
+          "reason_codes": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"},
+            "uniqueItems": true
+          }
+        }
+      }
+    }
+  }
+}

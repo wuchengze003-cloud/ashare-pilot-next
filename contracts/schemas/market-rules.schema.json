@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/market-rules/1.0.0",
+  "title": "A-share Market Rules",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_id", "schema_version", "rules_id", "segments"],
+  "properties": {
+    "contract_id": {"const": "market-rules"},
+    "schema_version": {"const": "1.0.0"},
+    "rules_id": {"type": "string", "pattern": "^[a-z0-9-]+/v[0-9]+$"},
+    "segments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "segment_id",
+          "board",
+          "security_status",
+          "valid_from",
+          "lot_size",
+          "sell_t_plus",
+          "price_limit_pct"
+        ],
+        "properties": {
+          "segment_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+          "board": {"enum": ["main", "gem", "star", "beijing"]},
+          "security_status": {"enum": ["normal", "st"]},
+          "valid_from": {"type": "string", "format": "date"},
+          "valid_to": {"type": ["string", "null"], "format": "date"},
+          "lot_size": {"type": "integer", "minimum": 1},
+          "sell_t_plus": {"type": "integer", "minimum": 0, "maximum": 2},
+          "price_limit_pct": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+        }
+      }
+    }
+  }
+}
