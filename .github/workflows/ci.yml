@@ -45,3 +45,4 @@ jobs:
         env:
           GITLEAKS_CONFIG: gitleaks.toml
           GITLEAKS_ENABLE_COMMENTS: "false"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
