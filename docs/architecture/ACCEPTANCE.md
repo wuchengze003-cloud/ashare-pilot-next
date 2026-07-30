@@ -56,7 +56,10 @@ Dataset Manifest
 - 策略只接收快照，不接收路径、文件句柄或独立行情副本。
 - 未来行和文件行序变化不改变历史Snapshot哈希或参考目标。
 - 正常每日Manifest变化不会被误判为Champion合同漂移。
-- Signal先写、Manifest最后写的不可变原子发布。
+- Production Signal、Signal Head和Runtime Manifest以不可变字节构建。
+- 运行目录完整落盘并带`COMMITTED`标记后，当前链头才原子切换。
+- 旧链头分叉、未来信号倒灌、未提交目录和产物交叉哈希错误均被阻断。
+- 运行目录重命名前后及链头切换后的故障可通过同一产物幂等恢复。
 
 Web只读渲染仍是后续里程碑；在此之前本仓库继续标记为“不用于真实交易”。
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
+import json
 import os
 import shutil
 from collections.abc import Mapping
@@ -61,8 +63,39 @@ FIXED_CONTRACT_FIELDS = {
 
 @dataclass(frozen=True)
 class RunArtifacts:
-    production_signal: dict[str, Any]
-    runtime_manifest: dict[str, Any]
+    production_signal_bytes: bytes
+    runtime_manifest_bytes: bytes
+    signal_head_bytes: bytes
+    expected_previous_head_sha256: str | None
+
+    @property
+    def production_signal(self) -> dict[str, Any]:
+        return _decode_json_object(self.production_signal_bytes)
+
+    @property
+    def runtime_manifest(self) -> dict[str, Any]:
+        return _decode_json_object(self.runtime_manifest_bytes)
+
+    @property
+    def signal_head(self) -> dict[str, Any]:
+        return _decode_json_object(self.signal_head_bytes)
+
+
+@dataclass(frozen=True)
+class _PreviousChain:
+    positions: tuple[TargetPosition, ...] | None
+    champion: ChampionRef | None
+    contract_set: ContractSet | None
+    signal_sha256: str | None
+    head_sha256: str | None
+    next_sequence: int
+
+
+def _decode_json_object(content: bytes) -> dict[str, Any]:
+    document = json.loads(content)
+    if not isinstance(document, dict):
+        raise ValueError("artifact must contain one JSON object")
+    return document
 
 
 def _validate_contract(
@@ -121,27 +154,43 @@ def _champion_binding_issues(
     return tuple(contract_issues), tuple(hash_issues)
 
 
-def _previous_signal_context(
+def _previous_chain_context(
     *,
     previous_signal: Mapping[str, Any] | None,
-    previous_signal_sha256: str | None,
+    previous_head: Mapping[str, Any] | None,
     schemas: Mapping[str, Mapping[str, Any]],
-) -> tuple[
-    tuple[TargetPosition, ...] | None,
-    ChampionRef | None,
-    ContractSet | None,
-]:
-    if (previous_signal is None) != (previous_signal_sha256 is None):
-        raise ValueError("previous signal document and expected hash must be provided together")
-    if previous_signal is None or previous_signal_sha256 is None:
-        return None, None, None
+    as_of: date,
+    generated_at: datetime,
+) -> _PreviousChain:
+    if (previous_signal is None) != (previous_head is None):
+        raise ValueError("previous signal and signal head must be provided together")
+    if previous_signal is None or previous_head is None:
+        return _PreviousChain(None, None, None, None, None, 1)
     _validate_contract(
         contract_id="production-signal",
         document=previous_signal,
         schemas=schemas,
     )
-    if canonical_json_sha256(previous_signal) != previous_signal_sha256:
-        raise ValueError("previous signal hash does not match expected hash")
+    _validate_contract(
+        contract_id="signal-head",
+        document=previous_head,
+        schemas=schemas,
+    )
+    signal_sha256 = canonical_json_sha256(previous_signal)
+    head_sha256 = canonical_json_sha256(previous_head)
+    if signal_sha256 != previous_head["signal_sha256"]:
+        raise ValueError("signal head does not reference the previous signal")
+    for field in ("signal_id", "as_of", "generated_at", "sequence"):
+        if previous_head[field] != previous_signal[field]:
+            raise ValueError(f"signal head {field} does not match previous signal")
+    previous_as_of = date.fromisoformat(str(previous_signal["as_of"]))
+    if previous_as_of > as_of:
+        raise ValueError("previous signal as_of cannot be later than current as_of")
+    previous_generated_at = datetime.fromisoformat(
+        str(previous_signal["generated_at"]).replace("Z", "+00:00")
+    )
+    if previous_generated_at >= generated_at:
+        raise ValueError("previous signal generated_at must be earlier than current")
     positions = tuple(
         TargetPosition(
             symbol=str(item["symbol"]),
@@ -179,7 +228,14 @@ def _previous_signal_context(
         config_sha256=str(raw_contract_set["config_sha256"]),
         lockfile_sha256=str(raw_contract_set["lockfile_sha256"]),
     )
-    return positions, champion, contract_set
+    return _PreviousChain(
+        positions=positions,
+        champion=champion,
+        contract_set=contract_set,
+        signal_sha256=signal_sha256,
+        head_sha256=head_sha256,
+        next_sequence=int(previous_signal["sequence"]) + 1,
+    )
 
 
 def _deduplicate(items: list[str]) -> tuple[str, ...]:
@@ -199,7 +255,7 @@ def build_run(
     documents: Mapping[str, Mapping[str, Any]],
     schemas: Mapping[str, Mapping[str, Any]],
     previous_signal: Mapping[str, Any] | None = None,
-    previous_signal_sha256: str | None = None,
+    previous_head: Mapping[str, Any] | None = None,
     risk_action: RiskAction = RiskAction.NONE,
 ) -> RunArtifacts:
     """Build one production state from verified inputs and internal health checks."""
@@ -240,13 +296,21 @@ def build_run(
         for contract_id, document in documents.items()
         if contract_id in BASE_INPUT_CONTRACTS | OPTIONAL_INPUT_CONTRACTS
     }
-    previous_positions, previous_champion, previous_contract_set = (
-        _previous_signal_context(
-            previous_signal=previous_signal,
-            previous_signal_sha256=previous_signal_sha256,
-            schemas=schemas,
-        )
+    previous_chain = _previous_chain_context(
+        previous_signal=previous_signal,
+        previous_head=previous_head,
+        schemas=schemas,
+        as_of=as_of,
+        generated_at=generated_at,
     )
+    previous_positions = previous_chain.positions
+    previous_champion = previous_chain.champion
+    previous_contract_set = previous_chain.contract_set
+    if previous_head is not None:
+        if previous_head["run_id"] == run_id:
+            raise ValueError("run_id must differ from the previous signal head")
+        if previous_head["signal_id"] == signal_id:
+            raise ValueError("signal_id must differ from the previous signal head")
 
     reason_codes: list[str] = []
     decision_data_valid = True
@@ -471,12 +535,33 @@ def build_run(
             target_positions=targets,
             reason_codes=_deduplicate(reason_codes),
             champion=current_champion,
+            sequence=previous_chain.next_sequence,
+            previous_head_sha256=previous_chain.head_sha256,
             previous_signal=previous_signal,
-            previous_signal_sha256=previous_signal_sha256,
+            previous_signal_sha256=previous_chain.signal_sha256,
         ),
         schema=schemas["production-signal"],
     )
     signal_hash = canonical_json_sha256(production_signal)
+    signal_head = {
+        "contract_id": "signal-head",
+        "schema_version": "1.0.0",
+        "sequence": previous_chain.next_sequence,
+        "run_id": run_id,
+        "signal_id": signal_id,
+        "signal_sha256": signal_hash,
+        "previous_head_sha256": previous_chain.head_sha256,
+        "as_of": as_of.isoformat(),
+        "generated_at": generated_at.astimezone(UTC).isoformat().replace(
+            "+00:00", "Z"
+        ),
+    }
+    _validate_contract(
+        contract_id="signal-head",
+        document=signal_head,
+        schemas=schemas,
+    )
+    signal_head_hash = canonical_json_sha256(signal_head)
     runtime_manifest = {
         "contract_id": "runtime-manifest",
         "schema_version": "1.0.0",
@@ -519,12 +604,22 @@ def build_run(
             },
         ]
         + (
-            [{"artifact_id": "previous-production-signal", "sha256": previous_signal_sha256}]
-            if previous_signal_sha256 is not None
+            [
+                {
+                    "artifact_id": "previous-production-signal",
+                    "sha256": previous_chain.signal_sha256,
+                },
+                {
+                    "artifact_id": "previous-signal-head",
+                    "sha256": previous_chain.head_sha256,
+                },
+            ]
+            if previous_chain.signal_sha256 is not None
             else []
         ),
         "outputs": [
             {"artifact_id": "production-signal", "sha256": signal_hash},
+            {"artifact_id": "signal-head", "sha256": signal_head_hash},
         ],
     }
     _validate_contract(
@@ -533,8 +628,10 @@ def build_run(
         schemas=schemas,
     )
     return RunArtifacts(
-        production_signal=production_signal,
-        runtime_manifest=runtime_manifest,
+        production_signal_bytes=canonical_json_bytes(production_signal),
+        runtime_manifest_bytes=canonical_json_bytes(runtime_manifest),
+        signal_head_bytes=canonical_json_bytes(signal_head),
+        expected_previous_head_sha256=previous_chain.head_sha256,
     )
 
 
@@ -553,28 +650,277 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def publish_run(*, output_dir: Path, artifacts: RunArtifacts) -> None:
-    """Publish an immutable run directory, exposing the manifest last."""
-    if output_dir.exists():
-        raise FileExistsError(f"run output already exists: {output_dir}")
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    temporary_dir = output_dir.with_name(f".{output_dir.name}.tmp")
-    if temporary_dir.exists():
-        raise FileExistsError(f"temporary run output already exists: {temporary_dir}")
+COMMIT_MARKER = b"ashare-pilot-committed-run-v1\n"
+RUN_FILENAMES = {
+    "production-signal.json",
+    "runtime-manifest.json",
+    "signal-head.json",
+    "COMMITTED",
+}
 
-    temporary_dir.mkdir()
-    try:
-        _write_fsynced(
-            temporary_dir / "production-signal.json",
-            canonical_json_bytes(artifacts.production_signal),
+
+def _manifest_artifact_hash(
+    manifest: Mapping[str, Any],
+    *,
+    section: str,
+    artifact_id: str,
+) -> str:
+    matches = [
+        str(item["sha256"])
+        for item in manifest[section]
+        if item["artifact_id"] == artifact_id
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"runtime manifest must reference {artifact_id} exactly once in {section}"
         )
-        _write_fsynced(
-            temporary_dir / "runtime-manifest.json",
-            canonical_json_bytes(artifacts.runtime_manifest),
+    return matches[0]
+
+
+def _validate_run_artifacts(
+    artifacts: RunArtifacts,
+    *,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    signal = artifacts.production_signal
+    manifest = artifacts.runtime_manifest
+    head = artifacts.signal_head
+    for content, document, label in (
+        (artifacts.production_signal_bytes, signal, "production signal"),
+        (artifacts.runtime_manifest_bytes, manifest, "runtime manifest"),
+        (artifacts.signal_head_bytes, head, "signal head"),
+    ):
+        if canonical_json_bytes(document) != content:
+            raise ValueError(f"{label} bytes are not canonical")
+    _validate_contract(
+        contract_id="production-signal",
+        document=signal,
+        schemas=schemas,
+    )
+    _validate_contract(
+        contract_id="runtime-manifest",
+        document=manifest,
+        schemas=schemas,
+    )
+    _validate_contract(
+        contract_id="signal-head",
+        document=head,
+        schemas=schemas,
+    )
+
+    signal_sha256 = canonical_json_sha256(signal)
+    head_sha256 = canonical_json_sha256(head)
+    if head["signal_sha256"] != signal_sha256:
+        raise ValueError("signal head does not reference the production signal")
+    for field in ("signal_id", "sequence", "as_of", "generated_at"):
+        if head[field] != signal[field]:
+            raise ValueError(f"signal head {field} does not match production signal")
+    if head["previous_head_sha256"] != signal["previous_head_sha256"]:
+        raise ValueError("signal and signal head disagree on the previous head")
+    if head["previous_head_sha256"] != artifacts.expected_previous_head_sha256:
+        raise ValueError("run artifacts expected previous head does not match signal head")
+    if manifest["run_id"] != head["run_id"]:
+        raise ValueError("runtime manifest run_id does not match signal head")
+    for field in ("as_of", "generated_at"):
+        if manifest[field] != head[field]:
+            raise ValueError(f"runtime manifest {field} does not match signal head")
+    if (
+        _manifest_artifact_hash(
+            manifest,
+            section="outputs",
+            artifact_id="production-signal",
         )
-        _fsync_directory(temporary_dir)
-        os.replace(temporary_dir, output_dir)
-        _fsync_directory(output_dir.parent)
-    except BaseException:
-        shutil.rmtree(temporary_dir, ignore_errors=True)
-        raise
+        != signal_sha256
+    ):
+        raise ValueError("runtime manifest production signal hash is invalid")
+    if (
+        _manifest_artifact_hash(
+            manifest,
+            section="outputs",
+            artifact_id="signal-head",
+        )
+        != head_sha256
+    ):
+        raise ValueError("runtime manifest signal head hash is invalid")
+    return signal, manifest, head
+
+
+def load_committed_run(
+    *,
+    output_dir: Path,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> RunArtifacts:
+    """Load one self-validating run only when its commit marker is present."""
+    if output_dir.is_symlink() or not output_dir.is_dir():
+        raise ValueError(f"committed run directory is invalid: {output_dir}")
+    actual_names = {path.name for path in output_dir.iterdir()}
+    if actual_names != RUN_FILENAMES:
+        raise ValueError("committed run directory has missing or unexpected files")
+    for path in output_dir.iterdir():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("committed run artifacts must be regular files")
+    if (output_dir / "COMMITTED").read_bytes() != COMMIT_MARKER:
+        raise ValueError("run commit marker is invalid")
+    head_bytes = (output_dir / "signal-head.json").read_bytes()
+    head = _decode_json_object(head_bytes)
+    artifacts = RunArtifacts(
+        production_signal_bytes=(output_dir / "production-signal.json").read_bytes(),
+        runtime_manifest_bytes=(output_dir / "runtime-manifest.json").read_bytes(),
+        signal_head_bytes=head_bytes,
+        expected_previous_head_sha256=head["previous_head_sha256"],
+    )
+    _validate_run_artifacts(artifacts, schemas=schemas)
+    return artifacts
+
+
+def _read_current_head(
+    *,
+    head_path: Path,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> tuple[bytes, dict[str, Any]] | None:
+    if head_path.is_symlink():
+        raise ValueError("current signal head must not be a symlink")
+    if not head_path.exists():
+        return None
+    if not head_path.is_file():
+        raise ValueError("current signal head must be a regular file")
+    content = head_path.read_bytes()
+    document = _decode_json_object(content)
+    if canonical_json_bytes(document) != content:
+        raise ValueError("current signal head bytes are not canonical")
+    _validate_contract(
+        contract_id="signal-head",
+        document=document,
+        schemas=schemas,
+    )
+    return content, document
+
+
+def load_current_run(
+    *,
+    runs_root: Path,
+    head_path: Path,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> RunArtifacts | None:
+    """Resolve the only consumer-visible run through the committed head."""
+    current = _read_current_head(head_path=head_path, schemas=schemas)
+    if current is None:
+        return None
+    head_bytes, head = current
+    artifacts = load_committed_run(
+        output_dir=runs_root / str(head["run_id"]),
+        schemas=schemas,
+    )
+    if artifacts.signal_head_bytes != head_bytes:
+        raise ValueError("current signal head does not match its committed run")
+    return artifacts
+
+
+def _assert_expected_head(
+    *,
+    head_path: Path,
+    expected_sha256: str | None,
+    new_head_sha256: str,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    current = _read_current_head(head_path=head_path, schemas=schemas)
+    if current is None:
+        if expected_sha256 is not None:
+            raise RuntimeError("current signal head is missing")
+        return False
+    current_sha256 = hashlib.sha256(current[0]).hexdigest()
+    if current_sha256 == new_head_sha256:
+        return True
+    if current_sha256 != expected_sha256:
+        raise RuntimeError("current signal head changed since the run was built")
+    return False
+
+
+def _remove_stale_temporary(path: Path) -> None:
+    if not path.exists():
+        return
+    if path.is_symlink():
+        raise ValueError(f"temporary publication path cannot be a symlink: {path}")
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.is_file():
+        path.unlink()
+    else:
+        raise ValueError(f"temporary publication path is invalid: {path}")
+
+
+def publish_run(
+    *,
+    output_dir: Path,
+    head_path: Path,
+    artifacts: RunArtifacts,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Commit an immutable run, then atomically advance the consumer-visible head."""
+    _, _, new_head = _validate_run_artifacts(artifacts, schemas=schemas)
+    if output_dir.name != new_head["run_id"]:
+        raise ValueError("output directory name must equal the signal head run_id")
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    head_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = head_path.with_name(f".{head_path.name}.lock")
+
+    with lock_path.open("a+b") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        new_head_sha256 = hashlib.sha256(artifacts.signal_head_bytes).hexdigest()
+        if _assert_expected_head(
+            head_path=head_path,
+            expected_sha256=artifacts.expected_previous_head_sha256,
+            new_head_sha256=new_head_sha256,
+            schemas=schemas,
+        ):
+            _fsync_directory(head_path.parent)
+            return
+
+        if output_dir.exists():
+            existing = load_committed_run(output_dir=output_dir, schemas=schemas)
+            if existing != artifacts:
+                raise FileExistsError(
+                    f"run output already exists with different content: {output_dir}"
+                )
+        else:
+            temporary_dir = output_dir.with_name(f".{output_dir.name}.tmp")
+            _remove_stale_temporary(temporary_dir)
+            temporary_dir.mkdir()
+            try:
+                _write_fsynced(
+                    temporary_dir / "production-signal.json",
+                    artifacts.production_signal_bytes,
+                )
+                _write_fsynced(
+                    temporary_dir / "runtime-manifest.json",
+                    artifacts.runtime_manifest_bytes,
+                )
+                _write_fsynced(
+                    temporary_dir / "signal-head.json",
+                    artifacts.signal_head_bytes,
+                )
+                _write_fsynced(temporary_dir / "COMMITTED", COMMIT_MARKER)
+                _fsync_directory(temporary_dir)
+                os.replace(temporary_dir, output_dir)
+                _fsync_directory(output_dir.parent)
+            except BaseException:
+                shutil.rmtree(temporary_dir, ignore_errors=True)
+                raise
+
+        if _assert_expected_head(
+            head_path=head_path,
+            expected_sha256=artifacts.expected_previous_head_sha256,
+            new_head_sha256=new_head_sha256,
+            schemas=schemas,
+        ):
+            _fsync_directory(head_path.parent)
+            return
+        temporary_head = head_path.with_name(f".{head_path.name}.tmp")
+        _remove_stale_temporary(temporary_head)
+        try:
+            _write_fsynced(temporary_head, artifacts.signal_head_bytes)
+            os.replace(temporary_head, head_path)
+            _fsync_directory(head_path.parent)
+        except BaseException:
+            temporary_head.unlink(missing_ok=True)
+            raise

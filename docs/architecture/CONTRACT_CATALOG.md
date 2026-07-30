@@ -15,6 +15,7 @@
 | Champion | Research晋级流程 | Signal Runner、Web | 按状态机降级 |
 | Strategy Adapter | Research晋级流程 | Signal Runner | 不加载或按状态机保持上一目标 |
 | Production Signal | Signal Runner | Web、未来执行适配器 | 不展示为新目标 |
+| Signal Head | Signal Runner | Signal Runner、Web、Ops | 不切换当前生产信号 |
 | Runtime Manifest | Signal Runner/Ops | Web、审计 | 不发布 |
 | Stage Health | 各阶段 | Ops、Web运维面 | 阻断后续阶段 |
 
@@ -33,15 +34,25 @@
 - `UniverseSnapshot`哈希由规则身份、日期和规范化成员生成。
 - 当日成员内容可以变化；生成规则ID或版本变化属于合同漂移。
 
-## Production Signal 3.0
+## Production Signal 4.0
 
 - 使用`contract_set`分别绑定当日Dataset Manifest、点时Dataset Snapshot、
   点时Universe Snapshot、Champion、成本、市场规则、执行规则、组合风险、
   代码、配置和锁文件哈希。
 - `HOLD`与`REDUCE_ONLY`必须引用并加载上一份完整信号。
+- 每份信号带单调递增序号、前序信号哈希和前链头哈希；首份信号序号固定为1。
 - `HOLD`目标必须与上一有效目标相同。
 - `REDUCE_ONLY`不得新增证券，也不得提高任何证券目标权重。
 - Signal Runner构建完成后必须再次通过正式JSON Schema，验证失败不得发布。
+
+## Signal Head 1.0
+
+- 链头绑定当前运行、当前信号、信号内容哈希、序号、日期和前链头哈希。
+- 新运行只能从当前已提交链头继续；旧链头、跳号、未来信号和并发分叉均不得切换。
+- 运行目录先以`COMMITTED`标记完整提交，随后再原子替换当前链头。消费者只通过
+  当前链头读取自校验通过的运行目录。
+- 运行目录提交后、链头切换前失败会留下未激活的完整目录；使用相同不可变产物
+  重试即可恢复。链头切换后落盘确认失败同样允许幂等重试。
 
 ## Cost Model 2.0
 
