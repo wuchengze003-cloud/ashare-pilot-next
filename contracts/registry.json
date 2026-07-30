@@ -47,6 +47,11 @@
       "examples": ["examples/champion.example.json"]
     },
     {
+      "contract_id": "strategy-adapter",
+      "schema": "schemas/strategy-adapter.schema.json",
+      "examples": ["examples/strategy-adapter.example.json"]
+    },
+    {
       "contract_id": "production-signal",
       "schema": "schemas/production-signal.schema.json",
       "examples": [

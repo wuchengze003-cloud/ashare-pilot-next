@@ -13,6 +13,7 @@
 | Experiment Config | Research | Research | 实验无效 |
 | Promotion Gate | Research治理 | Research | 不晋级 |
 | Champion | Research晋级流程 | Signal Runner、Web | 按状态机降级 |
+| Strategy Adapter | Research晋级流程 | Signal Runner | 不加载或按状态机保持上一目标 |
 | Production Signal | Signal Runner | Web、未来执行适配器 | 不展示为新目标 |
 | Runtime Manifest | Signal Runner/Ops | Web、审计 | 不发布 |
 | Stage Health | 各阶段 | Ops、Web运维面 | 阻断后续阶段 |
@@ -63,8 +64,17 @@
 - Champion必须记录适配器ID和适配器产物哈希。
 - 正常新增行情或成员调整不会因为每日内容哈希变化而使Champion失效；Schema、
   标准化逻辑、Universe生成规则或固定合同变化时不得激活。
-- 当前仅校验运行时策略对象声明的适配器身份。按Champion从受信任不可变产物加载
-  适配器、计算本地代码和锁文件真实摘要，仍属于后续独立Gate。
+- Signal Runner不得接收调用者注入的策略对象；只能按Champion的`adapter_id`从
+  受控根目录定位适配器包。
+
+## Strategy Adapter 1.0
+
+- 包含适配器、策略和入口身份，以及代码、配置和规范化包摘要。
+- Signal Runner先验证Manifest、Champion绑定、代码字节和配置字节，再执行已验证
+  的代码字节；不按路径二次读取代码。
+- 适配器返回对象的策略ID、版本和协议必须再次校验。
+- 适配器包是正式策略的不可变载体。当前仓库只提交位于测试目录的纯合成参考包，
+  不存在可晋级的正式策略。
 
 ## 版本规则
 

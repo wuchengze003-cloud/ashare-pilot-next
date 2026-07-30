@@ -1,0 +1,13 @@
+{
+  "contract_id": "strategy-adapter",
+  "schema_version": "1.0.0",
+  "adapter_id": "fixture-reference-adapter/v1",
+  "strategy_id": "fixture-reference",
+  "strategy_version": "v1",
+  "entrypoint": "adapter.py:build_strategy",
+  "code_file": "adapter.py",
+  "code_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "config_file": "config.json",
+  "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "package_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

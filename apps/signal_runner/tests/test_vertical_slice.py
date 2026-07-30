@@ -1,17 +1,13 @@
 import hashlib
+import inspect
 import json
 import shutil
-from collections import defaultdict
+import subprocess
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from ashare_quant_core import (
-    DatasetSnapshot,
-    RiskAction,
-    TargetPosition,
-    UniverseSnapshot,
-)
+from ashare_quant_core import RiskAction
 from ashare_signal_runner import (
     build_run,
     canonical_json_bytes,
@@ -25,6 +21,16 @@ ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_ROOT = ROOT / "contracts/golden_fixtures/vertical-slice"
 EXAMPLES = ROOT / "contracts/examples"
 SCHEMAS = ROOT / "contracts/schemas"
+ADAPTER_ROOT = (
+    ROOT / "apps/signal_runner/tests/fixtures/approved_adapters"
+)
+DEPLOYMENT_GIT_SHA = subprocess.run(
+    ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+LOCKFILE_SHA256 = hashlib.sha256((ROOT / "uv.lock").read_bytes()).hexdigest()
 FIXED_CONTRACT_FIELDS = {
     "cost-model": "cost_model_sha256",
     "execution-policy": "execution_policy_sha256",
@@ -66,50 +72,8 @@ def load_documents() -> dict[str, dict[str, object]]:
     return documents
 
 
-class FixtureReferenceStrategy:
-    """Test-only momentum adapter; never eligible for production promotion."""
-
-    strategy_id = "fixture-reference"
-    strategy_version = "v1"
-    adapter_id = "fixture-reference-adapter/v1"
-    adapter_sha256 = "a" * 64
-
-    def target_positions(
-        self,
-        *,
-        as_of: date,
-        dataset_snapshot: DatasetSnapshot,
-        universe_snapshot: UniverseSnapshot,
-    ) -> tuple[TargetPosition, ...]:
-        if not dataset_snapshot.dataset_family_id.startswith("fixture-daily/"):
-            raise ValueError("unexpected fixture dataset")
-        if universe_snapshot.universe_id != "fixture-csi800-pit/v1":
-            raise ValueError("unexpected fixture universe")
-
-        history: dict[str, list[tuple[date, float]]] = defaultdict(list)
-        for bar in dataset_snapshot.bars(through=as_of):
-            if bar.symbol in universe_snapshot.eligible_symbols:
-                history[bar.symbol].append((bar.trade_date, bar.close))
-
-        momentum: list[tuple[float, str]] = []
-        for symbol, observations in history.items():
-            ordered = sorted(observations)
-            if len(ordered) >= 2:
-                momentum.append((ordered[-1][1] / ordered[-2][1] - 1, symbol))
-        if not momentum:
-            return ()
-        _, selected = max(momentum, key=lambda item: (item[0], item[1]))
-        return (TargetPosition(selected, 0.15),)
-
-
-def reference_strategy() -> FixtureReferenceStrategy:
-    return FixtureReferenceStrategy()
-
-
 def bind_champion_to_documents(
     documents: dict[str, dict[str, object]],
-    *,
-    lockfile_sha256: str = "3" * 64,
 ) -> None:
     champion = documents["champion"]
     fixed_contract_set = champion["fixed_contract_set"]
@@ -118,15 +82,15 @@ def bind_champion_to_documents(
         fixed_contract_set[champion_field] = canonical_json_sha256(
             documents[contract_id]
         )
-    fixed_contract_set["lockfile_sha256"] = lockfile_sha256
+    fixed_contract_set["lockfile_sha256"] = LOCKFILE_SHA256
 
 
 def build_fixture_run(
     *,
     dataset_root: Path = FIXTURE_ROOT,
     documents: dict[str, dict[str, object]] | None = None,
-    strategy: FixtureReferenceStrategy | None = None,
-    lockfile_sha256: str = "3" * 64,
+    adapter_root: Path = ADAPTER_ROOT,
+    deployment_git_sha: str = DEPLOYMENT_GIT_SHA,
     as_of: date = date(2026, 7, 29),
     generated_at: datetime = datetime(2026, 7, 29, 8, 10, tzinfo=UTC),
     previous_signal: dict[str, object] | None = None,
@@ -134,13 +98,13 @@ def build_fixture_run(
     risk_action: RiskAction = RiskAction.NONE,
 ):
     return build_run(
-        strategy=strategy or reference_strategy(),
         as_of=as_of,
         generated_at=generated_at,
         signal_id=f"fixture-signal-{as_of.isoformat()}",
         run_id=f"fixture-run-{as_of.isoformat()}",
-        git_sha="1" * 40,
-        lockfile_sha256=lockfile_sha256,
+        deployment_git_sha=deployment_git_sha,
+        repository_root=ROOT,
+        adapter_root=adapter_root,
         dataset_root=dataset_root,
         documents=documents or load_documents(),
         schemas=load_schemas(),
@@ -183,6 +147,50 @@ def write_fixture_dataset(
     )
 
 
+def adapter_package_sha256(manifest: dict[str, object]) -> str:
+    return canonical_json_sha256(
+        {
+            "adapter_id": manifest["adapter_id"],
+            "strategy_id": manifest["strategy_id"],
+            "strategy_version": manifest["strategy_version"],
+            "entrypoint": manifest["entrypoint"],
+            "code_sha256": manifest["code_sha256"],
+            "config_sha256": manifest["config_sha256"],
+        }
+    )
+
+
+def rewrite_adapter_config(
+    *,
+    adapter_root: Path,
+    documents: dict[str, dict[str, object]],
+    forced_symbol: str | None,
+) -> None:
+    package_root = adapter_root / "fixture-reference-adapter/v1"
+    config_bytes = (
+        json.dumps(
+            {"target_weight": 0.15, "forced_symbol": forced_symbol},
+            ensure_ascii=True,
+            indent=2,
+        )
+        + "\n"
+    ).encode()
+    (package_root / "config.json").write_bytes(config_bytes)
+    manifest = load_json(package_root / "adapter.json")
+    assert isinstance(manifest, dict)
+    manifest["config_sha256"] = hashlib.sha256(config_bytes).hexdigest()
+    manifest["package_sha256"] = adapter_package_sha256(manifest)
+    (package_root / "adapter.json").write_text(
+        json.dumps(manifest, ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    champion = documents["champion"]
+    champion["adapter_sha256"] = manifest["package_sha256"]
+    fixed_contract_set = champion["fixed_contract_set"]
+    assert isinstance(fixed_contract_set, dict)
+    fixed_contract_set["config_sha256"] = manifest["config_sha256"]
+
+
 def test_vertical_slice_is_byte_deterministic_and_manifest_binds_output(
     tmp_path: Path,
 ) -> None:
@@ -209,6 +217,13 @@ def test_vertical_slice_is_byte_deterministic_and_manifest_binds_output(
     assert first.production_signal["contract_set"]["config_sha256"] == (
         fixed_contract_set["config_sha256"]
     )
+    adapter_package = ADAPTER_ROOT / "fixture-reference-adapter/v1"
+    assert first.production_signal["contract_set"]["code_sha256"] == hashlib.sha256(
+        (adapter_package / "adapter.py").read_bytes()
+    ).hexdigest()
+    assert first.production_signal["contract_set"]["config_sha256"] == hashlib.sha256(
+        (adapter_package / "config.json").read_bytes()
+    ).hexdigest()
     assert (
         first.production_signal["contract_set"]["dataset_manifest_sha256"]
         == promotion_evidence["dataset_manifest_sha256"]
@@ -237,6 +252,12 @@ def test_vertical_slice_is_byte_deterministic_and_manifest_binds_output(
         first.production_signal["contract_set"]["universe_snapshot_sha256"]
         == runtime_inputs["universe-snapshot"]
     )
+    assert (
+        runtime_inputs["strategy-adapter-package"]
+        == load_documents()["champion"]["adapter_sha256"]
+    )
+    assert runtime_inputs["lockfile"] == LOCKFILE_SHA256
+    assert first.runtime_manifest["git_sha"] == DEPLOYMENT_GIT_SHA
 
     output_dir = tmp_path / "fixture-run"
     publish_run(output_dir=output_dir, artifacts=first)
@@ -247,6 +268,11 @@ def test_vertical_slice_is_byte_deterministic_and_manifest_binds_output(
 
     with pytest.raises(FileExistsError, match="already exists"):
         publish_run(output_dir=output_dir, artifacts=first)
+
+
+def test_deployment_git_sha_must_match_checked_out_repository() -> None:
+    with pytest.raises(ValueError, match="does not match"):
+        build_fixture_run(deployment_git_sha="0" * 40)
 
 
 def test_dataset_content_hash_is_verified_before_strategy_runs(tmp_path: Path) -> None:
@@ -320,54 +346,30 @@ def test_dataset_symlink_is_rejected(tmp_path: Path) -> None:
         build_fixture_run(dataset_root=copied_fixture)
 
 
-def test_strategy_receives_only_immutable_snapshots() -> None:
-    class InspectingStrategy(FixtureReferenceStrategy):
-        received_dataset: DatasetSnapshot | None = None
-        received_universe: UniverseSnapshot | None = None
+def test_production_entry_cannot_accept_an_arbitrary_strategy_object() -> None:
+    parameters = inspect.signature(build_run).parameters
 
-        def target_positions(
-            self,
-            *,
-            as_of: date,
-            dataset_snapshot: DatasetSnapshot,
-            universe_snapshot: UniverseSnapshot,
-        ) -> tuple[TargetPosition, ...]:
-            self.received_dataset = dataset_snapshot
-            self.received_universe = universe_snapshot
-            return super().target_positions(
-                as_of=as_of,
-                dataset_snapshot=dataset_snapshot,
-                universe_snapshot=universe_snapshot,
-            )
-
-    strategy = InspectingStrategy()
-    build_fixture_run(strategy=strategy)
-
-    assert isinstance(strategy.received_dataset, DatasetSnapshot)
-    assert isinstance(strategy.received_universe, UniverseSnapshot)
-    assert not hasattr(strategy.received_dataset, "dataset_root")
-    assert not hasattr(strategy.received_dataset, "path")
+    assert "strategy" not in parameters
+    assert "git_sha" not in parameters
+    assert "lockfile_sha256" not in parameters
 
 
-def test_reference_strategy_cannot_accept_an_independent_bar_list() -> None:
-    with pytest.raises(TypeError):
-        FixtureReferenceStrategy(bars=[])  # type: ignore[call-arg]
-
-
-def test_portfolio_guard_rejects_strategy_target_outside_pit_universe() -> None:
-    class IneligibleStrategy(FixtureReferenceStrategy):
-        def target_positions(
-            self,
-            *,
-            as_of: date,
-            dataset_snapshot: DatasetSnapshot,
-            universe_snapshot: UniverseSnapshot,
-        ) -> tuple[TargetPosition, ...]:
-            return (TargetPosition("600000.SH", 0.15),)
+def test_portfolio_guard_rejects_loaded_target_outside_pit_universe(
+    tmp_path: Path,
+) -> None:
+    copied_adapters = tmp_path / "approved-adapters"
+    shutil.copytree(ADAPTER_ROOT, copied_adapters)
+    documents = load_documents()
+    rewrite_adapter_config(
+        adapter_root=copied_adapters,
+        documents=documents,
+        forced_symbol="600000.SH",
+    )
 
     with pytest.raises(ValueError, match="ineligible"):
         build_fixture_run(
-            strategy=IneligibleStrategy(),
+            adapter_root=copied_adapters,
+            documents=documents,
         )
 
 
@@ -441,9 +443,13 @@ def test_champion_contract_drift_holds_verified_previous_target(
 
 def test_champion_lockfile_drift_holds_verified_previous_target() -> None:
     previous = build_fixture_run().production_signal
+    documents = load_documents()
+    fixed_contract_set = documents["champion"]["fixed_contract_set"]
+    assert isinstance(fixed_contract_set, dict)
+    fixed_contract_set["lockfile_sha256"] = "4" * 64
 
     result = build_fixture_run(
-        lockfile_sha256="4" * 64,
+        documents=documents,
         previous_signal=previous,
         previous_signal_sha256=canonical_json_sha256(previous),
     )
@@ -475,61 +481,53 @@ def test_champion_rejects_declared_adapter_drift(
     adapter_value: str,
 ) -> None:
     previous = build_fixture_run().production_signal
-    strategy = reference_strategy()
-    setattr(strategy, adapter_field, adapter_value)
+    documents = load_documents()
+    documents["champion"][adapter_field] = adapter_value
 
     result = build_fixture_run(
-        strategy=strategy,
+        documents=documents,
         previous_signal=previous,
         previous_signal_sha256=canonical_json_sha256(previous),
     )
 
     assert result.production_signal["state"] == "HOLD"
     assert result.production_signal["target_positions"] == previous["target_positions"]
+    assert "ADAPTER_VERIFICATION_FAILED" in result.production_signal["reason_codes"]
 
 
-def test_champion_rejects_strategy_without_adapter_identity() -> None:
-    class UndeclaredAdapter:
-        strategy_id = "fixture-reference"
-        strategy_version = "v1"
-
-        def target_positions(
-            self,
-            *,
-            as_of: date,
-            dataset_snapshot: DatasetSnapshot,
-            universe_snapshot: UniverseSnapshot,
-        ) -> tuple[TargetPosition, ...]:
-            return ()
-
+def test_adapter_code_tampering_holds_without_execution(tmp_path: Path) -> None:
     previous = build_fixture_run().production_signal
+    copied_adapters = tmp_path / "approved-adapters"
+    shutil.copytree(ADAPTER_ROOT, copied_adapters)
+    code_path = (
+        copied_adapters
+        / "fixture-reference-adapter/v1/adapter.py"
+    )
+    code_path.write_text(
+        code_path.read_text(encoding="utf-8")
+        + "\nraise AssertionError('tampered code executed')\n",
+        encoding="utf-8",
+    )
+
     result = build_fixture_run(
-        strategy=UndeclaredAdapter(),
+        adapter_root=copied_adapters,
         previous_signal=previous,
         previous_signal_sha256=canonical_json_sha256(previous),
     )
 
     assert result.production_signal["state"] == "HOLD"
-    assert "CHAMPION_ADAPTER_ID_MISMATCH" in result.production_signal["reason_codes"]
-    assert (
-        "CHAMPION_ADAPTER_HASH_MISMATCH"
-        in result.production_signal["reason_codes"]
-    )
+    assert "ADAPTER_VERIFICATION_FAILED" in result.production_signal["reason_codes"]
 
 
-def test_no_champion_builds_initial_flat_without_running_strategy() -> None:
-    class MustNotRun:
-        strategy_id = "must-not-run"
-        strategy_version = "v1"
-        adapter_id = "must-not-run/v1"
-        adapter_sha256 = "f" * 64
-
-        def target_positions(self, **_: object) -> tuple[TargetPosition, ...]:
-            raise AssertionError("strategy must not run without a champion")
-
+def test_no_champion_builds_initial_flat_without_loading_adapter(
+    tmp_path: Path,
+) -> None:
     documents = load_documents()
     documents.pop("champion")
-    result = build_fixture_run(documents=documents, strategy=MustNotRun())
+    result = build_fixture_run(
+        documents=documents,
+        adapter_root=tmp_path / "missing-adapters",
+    )
 
     assert result.production_signal["state"] == "FLAT"
     assert result.production_signal["champion"] is None

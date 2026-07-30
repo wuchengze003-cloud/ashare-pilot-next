@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -18,7 +17,6 @@ from ashare_quant_core import (
     HealthSnapshot,
     RiskAction,
     RuntimeState,
-    Strategy,
     TargetPosition,
     UniverseSnapshot,
     resolve_state,
@@ -27,6 +25,12 @@ from ashare_quant_core import (
 )
 from jsonschema import Draft202012Validator, FormatChecker
 
+from .adapters import (
+    AdapterVerificationError,
+    VerifiedAdapter,
+    load_verified_adapter,
+)
+from .environment import resolve_runtime_environment
 from .runner import (
     ChampionRef,
     ContractSet,
@@ -46,8 +50,6 @@ BASE_INPUT_CONTRACTS = {
     "universe",
 }
 OPTIONAL_INPUT_CONTRACTS = {"champion"}
-SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
-GIT_SHA_PATTERN = re.compile(r"^[a-f0-9]{40}$")
 NO_STRATEGY_SHA256 = hashlib.sha256(b"ashare-pilot/no-strategy/v1").hexdigest()
 FIXED_CONTRACT_FIELDS = {
     "cost-model": "cost_model_sha256",
@@ -78,13 +80,6 @@ def _validate_contract(
     Draft202012Validator(schema, format_checker=FormatChecker()).validate(document)
 
 
-def _validate_request_hashes(*, git_sha: str, lockfile_sha256: str) -> None:
-    if not GIT_SHA_PATTERN.fullmatch(git_sha):
-        raise ValueError("git_sha must be a lowercase 40-character Git SHA")
-    if not SHA256_PATTERN.fullmatch(lockfile_sha256):
-        raise ValueError("lockfile_sha256 must be a lowercase SHA-256")
-
-
 def _champion_binding_issues(
     *,
     champion: Mapping[str, Any],
@@ -92,7 +87,7 @@ def _champion_binding_issues(
     dataset_manifest: Mapping[str, Any],
     universe: Mapping[str, Any],
     lockfile_sha256: str,
-    strategy: Strategy | None,
+    adapter: VerifiedAdapter | None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     contract_issues: list[str] = []
     hash_issues: list[str] = []
@@ -121,17 +116,8 @@ def _champion_binding_issues(
         contract_issues.append("CHAMPION_UNIVERSE_POLICY_VERSION_MISMATCH")
     if fixed_contract_set["lockfile_sha256"] != lockfile_sha256:
         hash_issues.append("CHAMPION_LOCKFILE_MISMATCH")
-    if strategy is None:
-        contract_issues.append("STRATEGY_ADAPTER_MISSING")
-    else:
-        if champion["strategy_id"] != strategy.strategy_id:
-            contract_issues.append("CHAMPION_STRATEGY_ID_MISMATCH")
-        if champion["strategy_version"] != strategy.strategy_version:
-            contract_issues.append("CHAMPION_STRATEGY_VERSION_MISMATCH")
-        if champion["adapter_id"] != getattr(strategy, "adapter_id", None):
-            contract_issues.append("CHAMPION_ADAPTER_ID_MISMATCH")
-        if champion["adapter_sha256"] != getattr(strategy, "adapter_sha256", None):
-            hash_issues.append("CHAMPION_ADAPTER_HASH_MISMATCH")
+    if adapter is None:
+        hash_issues.append("ADAPTER_VERIFICATION_FAILED")
     return tuple(contract_issues), tuple(hash_issues)
 
 
@@ -202,13 +188,13 @@ def _deduplicate(items: list[str]) -> tuple[str, ...]:
 
 def build_run(
     *,
-    strategy: Strategy | None,
     as_of: date,
     generated_at: datetime,
     signal_id: str,
     run_id: str,
-    git_sha: str,
-    lockfile_sha256: str,
+    deployment_git_sha: str,
+    repository_root: Path,
+    adapter_root: Path,
     dataset_root: Path,
     documents: Mapping[str, Mapping[str, Any]],
     schemas: Mapping[str, Mapping[str, Any]],
@@ -217,7 +203,10 @@ def build_run(
     risk_action: RiskAction = RiskAction.NONE,
 ) -> RunArtifacts:
     """Build one production state from verified inputs and internal health checks."""
-    _validate_request_hashes(git_sha=git_sha, lockfile_sha256=lockfile_sha256)
+    environment = resolve_runtime_environment(
+        repository_root=repository_root,
+        deployment_git_sha=deployment_git_sha,
+    )
     if generated_at.tzinfo is None or generated_at.utcoffset() != timedelta(0):
         raise ValueError("generated_at must be timezone-aware UTC")
     unknown_documents = sorted(
@@ -310,6 +299,8 @@ def build_run(
         reason_codes.append("UNIVERSE_SNAPSHOT_INVALID")
 
     current_champion: ChampionRef | None = None
+    verified_adapter: VerifiedAdapter | None = None
+    adapter_error: AdapterVerificationError | None = None
     champion_health = ChampionHealth.NEVER_ACTIVATED
     code_sha256 = NO_STRATEGY_SHA256
     config_sha256 = NO_STRATEGY_SHA256
@@ -343,13 +334,21 @@ def build_run(
         )
         if promoted_at > generated_at:
             raise ValueError("champion cannot be promoted after signal generation")
+        try:
+            verified_adapter = load_verified_adapter(
+                champion=champion,
+                adapter_root=adapter_root,
+                schema=schemas["strategy-adapter"],
+            )
+        except AdapterVerificationError as exc:
+            adapter_error = exc
         contract_issues, hash_issues = _champion_binding_issues(
             champion=champion,
             contract_hashes=contract_hashes,
             dataset_manifest=dataset_manifest,
             universe=universe,
-            lockfile_sha256=lockfile_sha256,
-            strategy=strategy,
+            lockfile_sha256=environment.lockfile_sha256,
+            adapter=verified_adapter,
         )
         if contract_issues:
             contracts_valid = False
@@ -369,11 +368,12 @@ def build_run(
     )
     state = resolve_state(health)
     if state in {RuntimeState.HOLD, RuntimeState.REDUCE_ONLY} and previous_positions is None:
-        if snapshot_error is not None:
+        verification_error = snapshot_error or adapter_error
+        if verification_error is not None:
             raise ValueError(
                 "cannot publish a degraded state without a previous signal: "
-                f"{snapshot_error}"
-            ) from snapshot_error
+                f"{verification_error}"
+            ) from verification_error
         raise ValueError(f"{state.value} requires a verified previous signal")
 
     dataset_snapshot_sha256 = (
@@ -407,7 +407,7 @@ def build_run(
         portfolio_risk_sha256=contract_hashes["portfolio-risk"],
         code_sha256=code_sha256,
         config_sha256=config_sha256,
-        lockfile_sha256=lockfile_sha256,
+        lockfile_sha256=environment.lockfile_sha256,
     )
 
     targets: tuple[TargetPosition, ...]
@@ -419,12 +419,12 @@ def build_run(
         assert previous_positions is not None
         targets = previous_positions
     else:
-        if strategy is None:
-            raise ValueError(f"{state.value} requires a strategy adapter")
+        if verified_adapter is None:
+            raise ValueError(f"{state.value} requires a verified strategy adapter")
         if dataset_snapshot is None or universe_snapshot is None:
             raise ValueError(f"{state.value} requires verified current snapshots")
         targets = tuple(
-            strategy.target_positions(
+            verified_adapter.strategy.target_positions(
                 as_of=as_of,
                 dataset_snapshot=dataset_snapshot,
                 universe_snapshot=universe_snapshot,
@@ -481,14 +481,33 @@ def build_run(
         "contract_id": "runtime-manifest",
         "schema_version": "1.0.0",
         "run_id": run_id,
-        "git_sha": git_sha,
+        "git_sha": environment.git_sha,
         "as_of": as_of.isoformat(),
         "generated_at": generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "inputs": [
             {"artifact_id": contract_id, "sha256": contract_hashes[contract_id]}
             for contract_id in sorted(contract_hashes)
         ]
-        + [{"artifact_id": "lockfile", "sha256": lockfile_sha256}]
+        + [
+            {
+                "artifact_id": "lockfile",
+                "sha256": environment.lockfile_sha256,
+            }
+        ]
+        + (
+            [
+                {
+                    "artifact_id": "strategy-adapter-manifest",
+                    "sha256": verified_adapter.manifest_sha256,
+                },
+                {
+                    "artifact_id": "strategy-adapter-package",
+                    "sha256": verified_adapter.package_sha256,
+                },
+            ]
+            if verified_adapter is not None
+            else []
+        )
         + [
             {
                 "artifact_id": "dataset-snapshot",
