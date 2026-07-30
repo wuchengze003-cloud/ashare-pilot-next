@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -15,11 +14,13 @@ from typing import Any
 
 from ashare_quant_core import (
     ChampionHealth,
+    DatasetSnapshot,
     HealthSnapshot,
     RiskAction,
     RuntimeState,
     Strategy,
     TargetPosition,
+    UniverseSnapshot,
     resolve_state,
     select_cost_segment,
     validate_portfolio_targets,
@@ -34,6 +35,7 @@ from .runner import (
     canonical_json_bytes,
     canonical_json_sha256,
 )
+from .snapshots import build_universe_snapshot, load_dataset_snapshot
 
 BASE_INPUT_CONTRACTS = {
     "cost-model",
@@ -47,13 +49,11 @@ OPTIONAL_INPUT_CONTRACTS = {"champion"}
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 GIT_SHA_PATTERN = re.compile(r"^[a-f0-9]{40}$")
 NO_STRATEGY_SHA256 = hashlib.sha256(b"ashare-pilot/no-strategy/v1").hexdigest()
-PROMOTION_CONTRACT_FIELDS = {
+FIXED_CONTRACT_FIELDS = {
     "cost-model": "cost_model_sha256",
-    "dataset-manifest": "dataset_manifest_sha256",
     "execution-policy": "execution_policy_sha256",
     "market-rules": "market_rules_sha256",
     "portfolio-risk": "portfolio_risk_sha256",
-    "universe": "universe_sha256",
 }
 
 
@@ -78,65 +78,6 @@ def _validate_contract(
     Draft202012Validator(schema, format_checker=FormatChecker()).validate(document)
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _json_row_count(path: Path) -> int | None:
-    if path.suffix.lower() != ".json":
-        return None
-    document = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(document, list):
-        return len(document)
-    if isinstance(document, Mapping) and isinstance(document.get("rows"), list):
-        return len(document["rows"])
-    return None
-
-
-def _verify_dataset_files(
-    dataset_manifest: Mapping[str, Any],
-    *,
-    dataset_root: Path,
-) -> None:
-    resolved_root = dataset_root.resolve(strict=True)
-    for artifact in dataset_manifest["files"]:
-        relative_path = Path(str(artifact["path"]))
-        candidate = dataset_root / relative_path
-        if candidate.is_symlink():
-            raise ValueError(f"dataset artifact cannot be a symlink: {relative_path}")
-        resolved = candidate.resolve(strict=True)
-        if not resolved.is_relative_to(resolved_root):
-            raise ValueError(f"dataset artifact escapes dataset root: {relative_path}")
-        actual_sha256 = _sha256_file(resolved)
-        if actual_sha256 != artifact["sha256"]:
-            raise ValueError(f"dataset artifact hash mismatch: {relative_path}")
-        actual_row_count = _json_row_count(resolved)
-        if actual_row_count is not None and actual_row_count != artifact["row_count"]:
-            raise ValueError(f"dataset artifact row count mismatch: {relative_path}")
-
-
-def _eligible_symbols(universe: Mapping[str, Any], *, as_of: date) -> set[str]:
-    eligible: set[str] = set()
-    seen: set[str] = set()
-    for member in universe["members"]:
-        symbol = str(member["symbol"])
-        if symbol in seen:
-            raise ValueError(f"universe contains duplicate symbol: {symbol}")
-        seen.add(symbol)
-        valid_from = date.fromisoformat(str(member["valid_from"]))
-        raw_valid_to = member.get("valid_to")
-        valid_to = date.fromisoformat(str(raw_valid_to)) if raw_valid_to else None
-        if not valid_from <= as_of or (valid_to is not None and as_of > valid_to):
-            raise ValueError(f"universe member validity does not cover as_of: {symbol}")
-        if member["eligible"]:
-            eligible.add(symbol)
-    return eligible
-
-
 def _validate_request_hashes(*, git_sha: str, lockfile_sha256: str) -> None:
     if not GIT_SHA_PATTERN.fullmatch(git_sha):
         raise ValueError("git_sha must be a lowercase 40-character Git SHA")
@@ -148,18 +89,37 @@ def _champion_binding_issues(
     *,
     champion: Mapping[str, Any],
     contract_hashes: Mapping[str, str],
+    dataset_manifest: Mapping[str, Any],
+    universe: Mapping[str, Any],
     lockfile_sha256: str,
     strategy: Strategy | None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     contract_issues: list[str] = []
     hash_issues: list[str] = []
-    promotion_contract_set = champion["promotion_contract_set"]
-    for contract_id, champion_field in PROMOTION_CONTRACT_FIELDS.items():
-        if promotion_contract_set[champion_field] != contract_hashes[contract_id]:
+    fixed_contract_set = champion["fixed_contract_set"]
+    for contract_id, champion_field in FIXED_CONTRACT_FIELDS.items():
+        if fixed_contract_set[champion_field] != contract_hashes[contract_id]:
             contract_issues.append(
                 f"CHAMPION_{contract_id.replace('-', '_').upper()}_MISMATCH"
             )
-    if promotion_contract_set["lockfile_sha256"] != lockfile_sha256:
+    compatibility = champion["promotion_compatibility"]
+    if compatibility["dataset_family_id"] != dataset_manifest["dataset_family_id"]:
+        contract_issues.append("CHAMPION_DATASET_FAMILY_MISMATCH")
+    if compatibility["data_schema_sha256"] != dataset_manifest["data_schema_sha256"]:
+        contract_issues.append("CHAMPION_DATA_SCHEMA_MISMATCH")
+    if (
+        compatibility["normalization_version"]
+        != dataset_manifest["normalization_version"]
+    ):
+        contract_issues.append("CHAMPION_NORMALIZATION_VERSION_MISMATCH")
+    if compatibility["universe_policy_id"] != universe["universe_policy_id"]:
+        contract_issues.append("CHAMPION_UNIVERSE_POLICY_MISMATCH")
+    if (
+        compatibility["universe_policy_version"]
+        != universe["universe_policy_version"]
+    ):
+        contract_issues.append("CHAMPION_UNIVERSE_POLICY_VERSION_MISMATCH")
+    if fixed_contract_set["lockfile_sha256"] != lockfile_sha256:
         hash_issues.append("CHAMPION_LOCKFILE_MISMATCH")
     if strategy is None:
         contract_issues.append("STRATEGY_ADAPTER_MISSING")
@@ -215,8 +175,15 @@ def _previous_signal_context(
     )
     raw_contract_set = previous_signal["contract_set"]
     contract_set = ContractSet(
-        dataset_sha256=str(raw_contract_set["dataset_sha256"]),
-        universe_sha256=str(raw_contract_set["universe_sha256"]),
+        dataset_manifest_sha256=str(
+            raw_contract_set["dataset_manifest_sha256"]
+        ),
+        dataset_snapshot_sha256=str(
+            raw_contract_set["dataset_snapshot_sha256"]
+        ),
+        universe_snapshot_sha256=str(
+            raw_contract_set["universe_snapshot_sha256"]
+        ),
         champion_sha256=raw_contract_set["champion_sha256"],
         cost_model_sha256=str(raw_contract_set["cost_model_sha256"]),
         market_rules_sha256=str(raw_contract_set["market_rules_sha256"]),
@@ -298,32 +265,49 @@ def build_run(
     hashes_valid = True
     dataset_as_of = date.fromisoformat(str(dataset_manifest["as_of"]))
     universe_as_of = date.fromisoformat(str(universe["as_of"]))
-    if dataset_as_of > as_of:
-        raise ValueError("dataset manifest cannot be later than the run as_of")
     if universe_as_of > as_of:
         raise ValueError("universe cannot be later than the run as_of")
-    if dataset_manifest["dataset_kind"] != "normalized":
-        decision_data_valid = False
-        reason_codes.append("DATASET_NOT_NORMALIZED")
     if dataset_manifest["quality_status"] != "pass":
         decision_data_valid = False
         reason_codes.append("DATASET_QUALITY_FAILED")
     if universe["quality_status"] != "pass":
         decision_data_valid = False
         reason_codes.append("UNIVERSE_QUALITY_FAILED")
-    if dataset_as_of != as_of:
+    if dataset_as_of < as_of:
         decision_data_valid = False
         reason_codes.append("DATASET_STALE")
     if universe_as_of != as_of:
         decision_data_valid = False
         reason_codes.append("UNIVERSE_STALE")
-    dataset_file_error: OSError | ValueError | json.JSONDecodeError | None = None
+
+    dataset_snapshot: DatasetSnapshot | None = None
+    universe_snapshot: UniverseSnapshot | None = None
+    snapshot_error: OSError | ValueError | None = None
     try:
-        _verify_dataset_files(dataset_manifest, dataset_root=dataset_root)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        dataset_file_error = exc
+        dataset_snapshot = load_dataset_snapshot(
+            dataset_manifest=dataset_manifest,
+            dataset_root=dataset_root,
+            as_of=as_of,
+        )
+    except (OSError, ValueError) as exc:
+        snapshot_error = exc
         hashes_valid = False
-        reason_codes.append("DATASET_FILES_INVALID")
+        reason_codes.append("DATASET_SNAPSHOT_INVALID")
+    if (
+        dataset_snapshot is not None
+        and dataset_snapshot.latest_trade_date != as_of
+    ):
+        decision_data_valid = False
+        reason_codes.append("DATASET_STALE")
+    try:
+        universe_snapshot = build_universe_snapshot(
+            universe=universe,
+            as_of=universe_as_of,
+        )
+    except ValueError as exc:
+        snapshot_error = snapshot_error or exc
+        hashes_valid = False
+        reason_codes.append("UNIVERSE_SNAPSHOT_INVALID")
 
     current_champion: ChampionRef | None = None
     champion_health = ChampionHealth.NEVER_ACTIVATED
@@ -351,9 +335,9 @@ def build_run(
             strategy_version=str(champion["strategy_version"]),
             sha256=champion_hash,
         )
-        promotion_contract_set = champion["promotion_contract_set"]
-        code_sha256 = str(promotion_contract_set["code_sha256"])
-        config_sha256 = str(promotion_contract_set["config_sha256"])
+        fixed_contract_set = champion["fixed_contract_set"]
+        code_sha256 = str(fixed_contract_set["code_sha256"])
+        config_sha256 = str(fixed_contract_set["config_sha256"])
         promoted_at = datetime.fromisoformat(
             str(champion["promoted_at"]).replace("Z", "+00:00")
         )
@@ -362,30 +346,17 @@ def build_run(
         contract_issues, hash_issues = _champion_binding_issues(
             champion=champion,
             contract_hashes=contract_hashes,
+            dataset_manifest=dataset_manifest,
+            universe=universe,
             lockfile_sha256=lockfile_sha256,
             strategy=strategy,
         )
-        if champion["dataset_id"] != dataset_manifest["dataset_id"]:
-            contract_issues = (*contract_issues, "CHAMPION_DATASET_ID_MISMATCH")
         if contract_issues:
             contracts_valid = False
             reason_codes.extend(contract_issues)
         if hash_issues:
             hashes_valid = False
             reason_codes.extend(hash_issues)
-
-    contract_set = ContractSet(
-        dataset_sha256=contract_hashes["dataset-manifest"],
-        universe_sha256=contract_hashes["universe"],
-        champion_sha256=champion_hash,
-        cost_model_sha256=contract_hashes["cost-model"],
-        market_rules_sha256=contract_hashes["market-rules"],
-        execution_policy_sha256=contract_hashes["execution-policy"],
-        portfolio_risk_sha256=contract_hashes["portfolio-risk"],
-        code_sha256=code_sha256,
-        config_sha256=config_sha256,
-        lockfile_sha256=lockfile_sha256,
-    )
 
     health = HealthSnapshot(
         execution_data_valid=True,
@@ -398,12 +369,46 @@ def build_run(
     )
     state = resolve_state(health)
     if state in {RuntimeState.HOLD, RuntimeState.REDUCE_ONLY} and previous_positions is None:
-        if dataset_file_error is not None:
+        if snapshot_error is not None:
             raise ValueError(
                 "cannot publish a degraded state without a previous signal: "
-                f"{dataset_file_error}"
-            ) from dataset_file_error
+                f"{snapshot_error}"
+            ) from snapshot_error
         raise ValueError(f"{state.value} requires a verified previous signal")
+
+    dataset_snapshot_sha256 = (
+        dataset_snapshot.snapshot_sha256
+        if dataset_snapshot is not None
+        else (
+            previous_contract_set.dataset_snapshot_sha256
+            if previous_contract_set is not None
+            else None
+        )
+    )
+    universe_snapshot_sha256 = (
+        universe_snapshot.snapshot_sha256
+        if universe_snapshot is not None
+        else (
+            previous_contract_set.universe_snapshot_sha256
+            if previous_contract_set is not None
+            else None
+        )
+    )
+    if dataset_snapshot_sha256 is None or universe_snapshot_sha256 is None:
+        raise ValueError("verified snapshot hashes are required to publish a signal")
+    contract_set = ContractSet(
+        dataset_manifest_sha256=contract_hashes["dataset-manifest"],
+        dataset_snapshot_sha256=dataset_snapshot_sha256,
+        universe_snapshot_sha256=universe_snapshot_sha256,
+        champion_sha256=champion_hash,
+        cost_model_sha256=contract_hashes["cost-model"],
+        market_rules_sha256=contract_hashes["market-rules"],
+        execution_policy_sha256=contract_hashes["execution-policy"],
+        portfolio_risk_sha256=contract_hashes["portfolio-risk"],
+        code_sha256=code_sha256,
+        config_sha256=config_sha256,
+        lockfile_sha256=lockfile_sha256,
+    )
 
     targets: tuple[TargetPosition, ...]
     if state is RuntimeState.FLAT:
@@ -416,16 +421,18 @@ def build_run(
     else:
         if strategy is None:
             raise ValueError(f"{state.value} requires a strategy adapter")
+        if dataset_snapshot is None or universe_snapshot is None:
+            raise ValueError(f"{state.value} requires verified current snapshots")
         targets = tuple(
             strategy.target_positions(
                 as_of=as_of,
-                dataset_id=str(dataset_manifest["dataset_id"]),
-                universe_id=str(universe["universe_id"]),
+                dataset_snapshot=dataset_snapshot,
+                universe_snapshot=universe_snapshot,
             )
         )
         validate_portfolio_targets(
             targets,
-            eligible_symbols=_eligible_symbols(universe, as_of=as_of),
+            eligible_symbols=set(universe_snapshot.eligible_symbols),
             max_positions=int(portfolio_risk["max_positions"]),
             max_single_weight=float(portfolio_risk["max_single_weight"]),
             max_gross_exposure=float(portfolio_risk["max_gross_exposure"]),
@@ -442,11 +449,22 @@ def build_run(
         else:
             reason_codes.append("RISK_REDUCE")
 
+    latest_complete_date = (
+        dataset_snapshot.latest_trade_date
+        if dataset_snapshot is not None
+        else (
+            date.fromisoformat(str(previous_signal["latest_complete_date"]))
+            if previous_signal is not None
+            else None
+        )
+    )
+    if latest_complete_date is None:
+        raise ValueError("latest complete trade date is unavailable")
     production_signal = build_production_signal(
         SignalInputs(
             signal_id=signal_id,
             as_of=as_of,
-            latest_complete_date=dataset_as_of,
+            latest_complete_date=latest_complete_date,
             generated_at=generated_at,
             health=health,
             contract_set=contract_set,
@@ -471,6 +489,16 @@ def build_run(
             for contract_id in sorted(contract_hashes)
         ]
         + [{"artifact_id": "lockfile", "sha256": lockfile_sha256}]
+        + [
+            {
+                "artifact_id": "dataset-snapshot",
+                "sha256": dataset_snapshot_sha256,
+            },
+            {
+                "artifact_id": "universe-snapshot",
+                "sha256": universe_snapshot_sha256,
+            },
+        ]
         + (
             [{"artifact_id": "previous-production-signal", "sha256": previous_signal_sha256}]
             if previous_signal_sha256 is not None

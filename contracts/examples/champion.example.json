@@ -1,22 +1,31 @@
 {
   "contract_id": "champion",
-  "schema_version": "2.0.0",
+  "schema_version": "3.0.0",
   "strategy_id": "fixture-reference",
   "strategy_version": "v1",
   "adapter_id": "fixture-reference-adapter/v1",
   "adapter_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "promoted_at": "2026-07-29T08:00:00Z",
-  "dataset_id": "fixture-daily-2026-07-29-aaaaaaaaaaaa",
-  "promotion_contract_set": {
+  "promotion_compatibility": {
+    "dataset_family_id": "fixture-daily/v1",
+    "data_schema_sha256": "f7c3a922e4ee8834bcea26870e689f99f90d2093c215ccd0baf72387567a5caf",
+    "normalization_version": "fixture-normalizer/v1",
+    "universe_policy_id": "fixture-csi800",
+    "universe_policy_version": "v1"
+  },
+  "promotion_evidence": {
     "dataset_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
-    "universe_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
-    "cost_model_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
-    "market_rules_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
-    "execution_policy_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
-    "portfolio_risk_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "dataset_snapshot_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "universe_snapshot_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "fixed_contract_set": {
+    "cost_model_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "market_rules_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "execution_policy_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "portfolio_risk_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
     "code_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "config_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "lockfile_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    "lockfile_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
   },
   "promotion_report_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 }

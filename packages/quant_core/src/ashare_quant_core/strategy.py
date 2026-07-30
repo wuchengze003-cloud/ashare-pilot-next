@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 
+from .snapshots import DatasetSnapshot, UniverseSnapshot
+
 
 @dataclass(frozen=True)
 class TargetPosition:
@@ -26,8 +28,8 @@ class Strategy(Protocol):
         self,
         *,
         as_of: date,
-        dataset_id: str,
-        universe_id: str,
+        dataset_snapshot: DatasetSnapshot,
+        universe_snapshot: UniverseSnapshot,
     ) -> Sequence[TargetPosition]:
         """Return deterministic targets for explicit immutable inputs."""
         ...

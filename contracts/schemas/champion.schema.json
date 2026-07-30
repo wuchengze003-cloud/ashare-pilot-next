@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.ashare-pilot.local/champion/2.0.0",
+  "$id": "https://contracts.ashare-pilot.local/champion/3.0.0",
   "title": "Champion",
   "type": "object",
   "additionalProperties": false,
@@ -12,25 +12,55 @@
     "adapter_id",
     "adapter_sha256",
     "promoted_at",
-    "dataset_id",
-    "promotion_contract_set",
+    "promotion_compatibility",
+    "promotion_evidence",
+    "fixed_contract_set",
     "promotion_report_sha256"
   ],
   "properties": {
     "contract_id": {"const": "champion"},
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "strategy_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
     "strategy_version": {"type": "string", "pattern": "^v[0-9]+(?:\\.[0-9]+){0,2}$"},
     "adapter_id": {"type": "string", "pattern": "^[a-z0-9-]+/v[0-9]+$"},
     "adapter_sha256": {"$ref": "#/$defs/sha256"},
     "promoted_at": {"type": "string", "format": "date-time"},
-    "dataset_id": {"type": "string", "minLength": 3},
-    "promotion_contract_set": {
+    "promotion_compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_family_id",
+        "data_schema_sha256",
+        "normalization_version",
+        "universe_policy_id",
+        "universe_policy_version"
+      ],
+      "properties": {
+        "dataset_family_id": {"type": "string", "minLength": 3, "maxLength": 160},
+        "data_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "normalization_version": {"type": "string", "minLength": 3, "maxLength": 80},
+        "universe_policy_id": {"type": "string", "minLength": 3, "maxLength": 80},
+        "universe_policy_version": {"type": "string", "minLength": 2, "maxLength": 40}
+      }
+    },
+    "promotion_evidence": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "dataset_manifest_sha256",
-        "universe_sha256",
+        "dataset_snapshot_sha256",
+        "universe_snapshot_sha256"
+      ],
+      "properties": {
+        "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "dataset_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "universe_snapshot_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "fixed_contract_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
         "cost_model_sha256",
         "market_rules_sha256",
         "execution_policy_sha256",
@@ -40,8 +70,6 @@
         "lockfile_sha256"
       ],
       "properties": {
-        "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
-        "universe_sha256": {"$ref": "#/$defs/sha256"},
         "cost_model_sha256": {"$ref": "#/$defs/sha256"},
         "market_rules_sha256": {"$ref": "#/$defs/sha256"},
         "execution_policy_sha256": {"$ref": "#/$defs/sha256"},

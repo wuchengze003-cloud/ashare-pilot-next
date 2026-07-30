@@ -1,18 +1,27 @@
 {
   "contract_id": "dataset-manifest",
-  "schema_version": "1.0.0",
-  "dataset_id": "fixture-daily-2026-07-29-b9591a573343",
+  "schema_version": "2.0.0",
+  "dataset_id": "fixture-daily-2026-07-29-69742470a695",
+  "dataset_family_id": "fixture-daily/v1",
   "dataset_kind": "normalized",
+  "data_schema_id": "normalized-daily-bar/v1",
+  "data_schema_sha256": "f7c3a922e4ee8834bcea26870e689f99f90d2093c215ccd0baf72387567a5caf",
+  "normalization_version": "fixture-normalizer/v1",
   "as_of": "2026-07-29",
   "generated_at": "2026-07-29T08:00:00Z",
   "source": "synthetic-fixture",
+  "source_version": "fixture-v1",
+  "parent_manifest_sha256": null,
   "quality_status": "pass",
   "quality_reasons": [],
   "files": [
     {
       "path": "daily-bars.json",
-      "sha256": "b9591a573343ef5efd4e17e714beacf60a412c32ef746abf6289bd6f57bb3ef6",
-      "row_count": 4
+      "sha256": "69742470a6958a93f21ca843685dc47e2e9416e9e07847ec3dd435fbd0153d3e",
+      "row_count": 4,
+      "file_size_bytes": 752,
+      "min_trade_date": "2026-07-28",
+      "max_trade_date": "2026-07-29"
     }
   ]
 }

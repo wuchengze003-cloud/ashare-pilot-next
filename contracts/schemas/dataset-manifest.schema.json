@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.ashare-pilot.local/dataset-manifest/1.0.0",
+  "$id": "https://contracts.ashare-pilot.local/dataset-manifest/2.0.0",
   "title": "Dataset Manifest",
   "type": "object",
   "additionalProperties": false,
@@ -8,21 +8,48 @@
     "contract_id",
     "schema_version",
     "dataset_id",
+    "dataset_family_id",
     "dataset_kind",
+    "data_schema_id",
+    "data_schema_sha256",
+    "normalization_version",
     "as_of",
     "generated_at",
     "source",
+    "source_version",
+    "parent_manifest_sha256",
     "quality_status",
+    "quality_reasons",
     "files"
   ],
   "properties": {
     "contract_id": {"const": "dataset-manifest"},
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "dataset_id": {"type": "string", "minLength": 3, "maxLength": 160},
+    "dataset_family_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*/v[0-9]+$"
+    },
     "dataset_kind": {"enum": ["raw", "normalized"]},
+    "data_schema_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*/v[0-9]+$"
+    },
+    "data_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "normalization_version": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*/v[0-9]+$"
+    },
     "as_of": {"type": "string", "format": "date"},
     "generated_at": {"type": "string", "format": "date-time"},
     "source": {"type": "string", "minLength": 1, "maxLength": 80},
+    "source_version": {"type": "string", "minLength": 1, "maxLength": 80},
+    "parent_manifest_sha256": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/sha256"}
+      ]
+    },
     "quality_status": {"enum": ["pass", "fail"]},
     "quality_reasons": {
       "type": "array",
@@ -32,19 +59,36 @@
     "files": {
       "type": "array",
       "minItems": 1,
+      "uniqueItems": true,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "sha256", "row_count"],
+        "required": [
+          "path",
+          "sha256",
+          "row_count",
+          "file_size_bytes",
+          "min_trade_date",
+          "max_trade_date"
+        ],
         "properties": {
           "path": {
             "type": "string",
             "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
           },
-          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-          "row_count": {"type": "integer", "minimum": 0}
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "row_count": {"type": "integer", "minimum": 1},
+          "file_size_bytes": {"type": "integer", "minimum": 1},
+          "min_trade_date": {"type": "string", "format": "date"},
+          "max_trade_date": {"type": "string", "format": "date"}
         }
       }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     }
   }
 }

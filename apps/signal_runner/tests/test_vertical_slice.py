@@ -6,26 +6,30 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from ashare_quant_core import RiskAction, TargetPosition
+from ashare_quant_core import (
+    DatasetSnapshot,
+    RiskAction,
+    TargetPosition,
+    UniverseSnapshot,
+)
 from ashare_signal_runner import (
     build_run,
     canonical_json_bytes,
     canonical_json_sha256,
     publish_run,
 )
+from ashare_signal_runner.snapshots import load_dataset_snapshot
 from jsonschema import ValidationError
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_ROOT = ROOT / "contracts/golden_fixtures/vertical-slice"
 EXAMPLES = ROOT / "contracts/examples"
 SCHEMAS = ROOT / "contracts/schemas"
-PROMOTION_CONTRACT_FIELDS = {
+FIXED_CONTRACT_FIELDS = {
     "cost-model": "cost_model_sha256",
-    "dataset-manifest": "dataset_manifest_sha256",
     "execution-policy": "execution_policy_sha256",
     "market-rules": "market_rules_sha256",
     "portfolio-risk": "portfolio_risk_sha256",
-    "universe": "universe_sha256",
 }
 
 
@@ -70,33 +74,22 @@ class FixtureReferenceStrategy:
     adapter_id = "fixture-reference-adapter/v1"
     adapter_sha256 = "a" * 64
 
-    def __init__(
-        self,
-        *,
-        bars: list[dict[str, object]],
-        eligible_symbols: set[str],
-    ) -> None:
-        self._bars = bars
-        self._eligible_symbols = eligible_symbols
-
     def target_positions(
         self,
         *,
         as_of: date,
-        dataset_id: str,
-        universe_id: str,
+        dataset_snapshot: DatasetSnapshot,
+        universe_snapshot: UniverseSnapshot,
     ) -> tuple[TargetPosition, ...]:
-        if not dataset_id.startswith("fixture-daily-"):
+        if not dataset_snapshot.dataset_family_id.startswith("fixture-daily/"):
             raise ValueError("unexpected fixture dataset")
-        if universe_id != "fixture-csi800-pit/v1":
+        if universe_snapshot.universe_id != "fixture-csi800-pit/v1":
             raise ValueError("unexpected fixture universe")
 
         history: dict[str, list[tuple[date, float]]] = defaultdict(list)
-        for row in self._bars:
-            symbol = str(row["symbol"])
-            trade_date = date.fromisoformat(str(row["trade_date"]))
-            if symbol in self._eligible_symbols and trade_date <= as_of:
-                history[symbol].append((trade_date, float(row["close"])))
+        for bar in dataset_snapshot.bars(through=as_of):
+            if bar.symbol in universe_snapshot.eligible_symbols:
+                history[bar.symbol].append((bar.trade_date, bar.close))
 
         momentum: list[tuple[float, str]] = []
         for symbol, observations in history.items():
@@ -109,22 +102,8 @@ class FixtureReferenceStrategy:
         return (TargetPosition(selected, 0.15),)
 
 
-def reference_strategy(
-    *,
-    bars: list[dict[str, object]] | None = None,
-) -> FixtureReferenceStrategy:
-    universe = load_json(FIXTURE_ROOT / "universe.json")
-    assert isinstance(universe, dict)
-    eligible = {
-        str(member["symbol"])
-        for member in universe["members"]
-        if member["eligible"]
-    }
-    if bars is None:
-        raw_bars = load_json(FIXTURE_ROOT / "daily-bars.json")
-        assert isinstance(raw_bars, list)
-        bars = raw_bars
-    return FixtureReferenceStrategy(bars=bars, eligible_symbols=eligible)
+def reference_strategy() -> FixtureReferenceStrategy:
+    return FixtureReferenceStrategy()
 
 
 def bind_champion_to_documents(
@@ -133,13 +112,13 @@ def bind_champion_to_documents(
     lockfile_sha256: str = "3" * 64,
 ) -> None:
     champion = documents["champion"]
-    promotion_contract_set = champion["promotion_contract_set"]
-    assert isinstance(promotion_contract_set, dict)
-    for contract_id, champion_field in PROMOTION_CONTRACT_FIELDS.items():
-        promotion_contract_set[champion_field] = canonical_json_sha256(
+    fixed_contract_set = champion["fixed_contract_set"]
+    assert isinstance(fixed_contract_set, dict)
+    for contract_id, champion_field in FIXED_CONTRACT_FIELDS.items():
+        fixed_contract_set[champion_field] = canonical_json_sha256(
             documents[contract_id]
         )
-    promotion_contract_set["lockfile_sha256"] = lockfile_sha256
+    fixed_contract_set["lockfile_sha256"] = lockfile_sha256
 
 
 def build_fixture_run(
@@ -171,6 +150,39 @@ def build_fixture_run(
     )
 
 
+def write_fixture_dataset(
+    *,
+    dataset_root: Path,
+    rows: list[dict[str, object]],
+    documents: dict[str, dict[str, object]],
+    manifest_as_of: date,
+) -> None:
+    content = (json.dumps(rows, ensure_ascii=True, indent=2) + "\n").encode()
+    (dataset_root / "daily-bars.json").write_bytes(content)
+    manifest = documents["dataset-manifest"]
+    manifest["dataset_id"] = (
+        f"fixture-daily-{manifest_as_of.isoformat()}-{hashlib.sha256(content).hexdigest()[:12]}"
+    )
+    manifest["as_of"] = manifest_as_of.isoformat()
+    manifest["generated_at"] = (
+        f"{manifest_as_of.isoformat()}T08:00:00Z"
+    )
+    files = manifest["files"]
+    assert isinstance(files, list)
+    artifact = files[0]
+    assert isinstance(artifact, dict)
+    trade_dates = [str(row["trade_date"]) for row in rows]
+    artifact.update(
+        {
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "row_count": len(rows),
+            "file_size_bytes": len(content),
+            "min_trade_date": min(trade_dates),
+            "max_trade_date": max(trade_dates),
+        }
+    )
+
+
 def test_vertical_slice_is_byte_deterministic_and_manifest_binds_output(
     tmp_path: Path,
 ) -> None:
@@ -187,13 +199,43 @@ def test_vertical_slice_is_byte_deterministic_and_manifest_binds_output(
     assert first.production_signal["target_positions"] == [
         {"symbol": "000001.SZ", "target_weight": 0.15}
     ]
-    promotion_contract_set = load_documents()["champion"]["promotion_contract_set"]
-    assert isinstance(promotion_contract_set, dict)
+    fixed_contract_set = load_documents()["champion"]["fixed_contract_set"]
+    assert isinstance(fixed_contract_set, dict)
+    promotion_evidence = load_documents()["champion"]["promotion_evidence"]
+    assert isinstance(promotion_evidence, dict)
     assert first.production_signal["contract_set"]["code_sha256"] == (
-        promotion_contract_set["code_sha256"]
+        fixed_contract_set["code_sha256"]
     )
     assert first.production_signal["contract_set"]["config_sha256"] == (
-        promotion_contract_set["config_sha256"]
+        fixed_contract_set["config_sha256"]
+    )
+    assert (
+        first.production_signal["contract_set"]["dataset_manifest_sha256"]
+        == promotion_evidence["dataset_manifest_sha256"]
+    )
+    assert (
+        first.production_signal["contract_set"]["dataset_snapshot_sha256"]
+        == promotion_evidence["dataset_snapshot_sha256"]
+    )
+    assert (
+        first.production_signal["contract_set"]["universe_snapshot_sha256"]
+        == promotion_evidence["universe_snapshot_sha256"]
+    )
+    runtime_inputs = {
+        item["artifact_id"]: item["sha256"]
+        for item in first.runtime_manifest["inputs"]
+    }
+    assert (
+        first.production_signal["contract_set"]["dataset_manifest_sha256"]
+        == runtime_inputs["dataset-manifest"]
+    )
+    assert (
+        first.production_signal["contract_set"]["dataset_snapshot_sha256"]
+        == runtime_inputs["dataset-snapshot"]
+    )
+    assert (
+        first.production_signal["contract_set"]["universe_snapshot_sha256"]
+        == runtime_inputs["universe-snapshot"]
     )
 
     output_dir = tmp_path / "fixture-run"
@@ -228,20 +270,104 @@ def test_dataset_row_count_is_verified_before_strategy_runs() -> None:
         build_fixture_run(documents=documents)
 
 
+def test_duplicate_daily_bar_primary_key_is_rejected(tmp_path: Path) -> None:
+    raw_bars = load_json(FIXTURE_ROOT / "daily-bars.json")
+    assert isinstance(raw_bars, list)
+    copied_fixture = tmp_path / "vertical-slice"
+    shutil.copytree(FIXTURE_ROOT, copied_fixture)
+    documents = load_documents()
+    write_fixture_dataset(
+        dataset_root=copied_fixture,
+        rows=[*raw_bars, dict(raw_bars[0])],
+        documents=documents,
+        manifest_as_of=date(2026, 7, 29),
+    )
+
+    with pytest.raises(ValueError, match="duplicate daily bar primary key"):
+        build_fixture_run(
+            dataset_root=copied_fixture,
+            documents=documents,
+        )
+
+
+def test_dataset_path_escape_is_rejected(tmp_path: Path) -> None:
+    copied_fixture = tmp_path / "vertical-slice"
+    shutil.copytree(FIXTURE_ROOT, copied_fixture)
+    documents = load_documents()
+    manifest = documents["dataset-manifest"]
+    files = manifest["files"]
+    assert isinstance(files, list)
+    files[0]["path"] = "../outside.json"
+    (tmp_path / "outside.json").write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="escapes dataset root"):
+        load_dataset_snapshot(
+            dataset_manifest=manifest,
+            dataset_root=copied_fixture,
+            as_of=date(2026, 7, 29),
+        )
+
+
+def test_dataset_symlink_is_rejected(tmp_path: Path) -> None:
+    copied_fixture = tmp_path / "vertical-slice"
+    shutil.copytree(FIXTURE_ROOT, copied_fixture)
+    target = tmp_path / "outside.json"
+    target.write_bytes((copied_fixture / "daily-bars.json").read_bytes())
+    (copied_fixture / "daily-bars.json").unlink()
+    (copied_fixture / "daily-bars.json").symlink_to(target)
+
+    with pytest.raises(ValueError, match="cannot be a symlink"):
+        build_fixture_run(dataset_root=copied_fixture)
+
+
+def test_strategy_receives_only_immutable_snapshots() -> None:
+    class InspectingStrategy(FixtureReferenceStrategy):
+        received_dataset: DatasetSnapshot | None = None
+        received_universe: UniverseSnapshot | None = None
+
+        def target_positions(
+            self,
+            *,
+            as_of: date,
+            dataset_snapshot: DatasetSnapshot,
+            universe_snapshot: UniverseSnapshot,
+        ) -> tuple[TargetPosition, ...]:
+            self.received_dataset = dataset_snapshot
+            self.received_universe = universe_snapshot
+            return super().target_positions(
+                as_of=as_of,
+                dataset_snapshot=dataset_snapshot,
+                universe_snapshot=universe_snapshot,
+            )
+
+    strategy = InspectingStrategy()
+    build_fixture_run(strategy=strategy)
+
+    assert isinstance(strategy.received_dataset, DatasetSnapshot)
+    assert isinstance(strategy.received_universe, UniverseSnapshot)
+    assert not hasattr(strategy.received_dataset, "dataset_root")
+    assert not hasattr(strategy.received_dataset, "path")
+
+
+def test_reference_strategy_cannot_accept_an_independent_bar_list() -> None:
+    with pytest.raises(TypeError):
+        FixtureReferenceStrategy(bars=[])  # type: ignore[call-arg]
+
+
 def test_portfolio_guard_rejects_strategy_target_outside_pit_universe() -> None:
     class IneligibleStrategy(FixtureReferenceStrategy):
         def target_positions(
             self,
             *,
             as_of: date,
-            dataset_id: str,
-            universe_id: str,
+            dataset_snapshot: DatasetSnapshot,
+            universe_snapshot: UniverseSnapshot,
         ) -> tuple[TargetPosition, ...]:
             return (TargetPosition("600000.SH", 0.15),)
 
     with pytest.raises(ValueError, match="ineligible"):
         build_fixture_run(
-            strategy=IneligibleStrategy(bars=[], eligible_symbols=set()),
+            strategy=IneligibleStrategy(),
         )
 
 
@@ -277,11 +403,7 @@ def mutate_bound_contract(
     contract_id: str,
 ) -> None:
     document = documents[contract_id]
-    if contract_id == "dataset-manifest":
-        document["source"] = "synthetic-fixture-v2"
-    elif contract_id == "universe":
-        document["source_version"] = "fixture-v2"
-    elif contract_id == "cost-model":
+    if contract_id == "cost-model":
         commission = document["commission"]
         assert isinstance(commission, dict)
         commission["rate"] = 0.00031
@@ -297,7 +419,7 @@ def mutate_bound_contract(
         raise AssertionError(f"unsupported contract fixture: {contract_id}")
 
 
-@pytest.mark.parametrize("contract_id", sorted(PROMOTION_CONTRACT_FIELDS))
+@pytest.mark.parametrize("contract_id", sorted(FIXED_CONTRACT_FIELDS))
 def test_champion_contract_drift_holds_verified_previous_target(
     contract_id: str,
 ) -> None:
@@ -331,11 +453,11 @@ def test_champion_lockfile_drift_holds_verified_previous_target() -> None:
     assert "CHAMPION_LOCKFILE_MISMATCH" in result.production_signal["reason_codes"]
 
 
-def test_champion_requires_complete_promotion_contract_set() -> None:
+def test_champion_requires_complete_fixed_contract_set() -> None:
     documents = load_documents()
-    promotion_contract_set = documents["champion"]["promotion_contract_set"]
-    assert isinstance(promotion_contract_set, dict)
-    promotion_contract_set.pop("portfolio_risk_sha256")
+    fixed_contract_set = documents["champion"]["fixed_contract_set"]
+    assert isinstance(fixed_contract_set, dict)
+    fixed_contract_set.pop("portfolio_risk_sha256")
 
     with pytest.raises(ValidationError, match="required property"):
         build_fixture_run(documents=documents)
@@ -375,8 +497,8 @@ def test_champion_rejects_strategy_without_adapter_identity() -> None:
             self,
             *,
             as_of: date,
-            dataset_id: str,
-            universe_id: str,
+            dataset_snapshot: DatasetSnapshot,
+            universe_snapshot: UniverseSnapshot,
         ) -> tuple[TargetPosition, ...]:
             return ()
 
@@ -481,26 +603,183 @@ def test_risk_actions_flow_through_production_pipeline() -> None:
     assert flat_result.production_signal["reason_codes"] == ["RISK_FLAT"]
 
 
-def test_future_rows_do_not_change_historical_reference_target() -> None:
+def test_future_rows_do_not_change_historical_snapshot_or_target(
+    tmp_path: Path,
+) -> None:
     raw_bars = load_json(FIXTURE_ROOT / "daily-bars.json")
     assert isinstance(raw_bars, list)
-    baseline = reference_strategy(bars=raw_bars).target_positions(
-        as_of=date(2026, 7, 29),
-        dataset_id="fixture-daily-2026-07-29-b9591a573343",
-        universe_id="fixture-csi800-pit/v1",
-    )
+    baseline = build_fixture_run()
+    copied_fixture = tmp_path / "vertical-slice"
+    shutil.copytree(FIXTURE_ROOT, copied_fixture)
+    documents = load_documents()
     with_future = [
         *raw_bars,
         {
             "symbol": "000001.SZ",
             "trade_date": "2026-07-30",
+            "open": 1.1,
+            "high": 1.2,
+            "low": 0.9,
             "close": 1.0,
+            "volume": 200000.0,
+            "amount": 200000.0,
         },
     ]
-    replayed = reference_strategy(bars=with_future).target_positions(
+    write_fixture_dataset(
+        dataset_root=copied_fixture,
+        rows=with_future,
+        documents=documents,
+        manifest_as_of=date(2026, 7, 30),
+    )
+    replayed = build_fixture_run(
+        dataset_root=copied_fixture,
+        documents=documents,
         as_of=date(2026, 7, 29),
-        dataset_id="fixture-daily-2026-07-30-future",
-        universe_id="fixture-csi800-pit/v1",
+    )
+    baseline_snapshot = load_dataset_snapshot(
+        dataset_manifest=load_documents()["dataset-manifest"],
+        dataset_root=FIXTURE_ROOT,
+        as_of=date(2026, 7, 29),
+    )
+    replayed_snapshot = load_dataset_snapshot(
+        dataset_manifest=documents["dataset-manifest"],
+        dataset_root=copied_fixture,
+        as_of=date(2026, 7, 29),
     )
 
-    assert replayed == baseline
+    assert replayed.production_signal["state"] == "ACTIVE"
+    assert replayed_snapshot.records == baseline_snapshot.records
+    assert (
+        replayed.production_signal["target_positions"]
+        == baseline.production_signal["target_positions"]
+    )
+    assert (
+        replayed.production_signal["contract_set"]["dataset_snapshot_sha256"]
+        == baseline.production_signal["contract_set"]["dataset_snapshot_sha256"]
+    )
+    assert (
+        replayed.production_signal["contract_set"]["dataset_manifest_sha256"]
+        != baseline.production_signal["contract_set"]["dataset_manifest_sha256"]
+    )
+
+
+def test_record_order_does_not_change_snapshot_or_target(tmp_path: Path) -> None:
+    raw_bars = load_json(FIXTURE_ROOT / "daily-bars.json")
+    assert isinstance(raw_bars, list)
+    baseline = build_fixture_run()
+    copied_fixture = tmp_path / "vertical-slice"
+    shutil.copytree(FIXTURE_ROOT, copied_fixture)
+    documents = load_documents()
+    write_fixture_dataset(
+        dataset_root=copied_fixture,
+        rows=list(reversed(raw_bars)),
+        documents=documents,
+        manifest_as_of=date(2026, 7, 29),
+    )
+
+    replayed = build_fixture_run(
+        dataset_root=copied_fixture,
+        documents=documents,
+    )
+
+    assert (
+        replayed.production_signal["contract_set"]["dataset_snapshot_sha256"]
+        == baseline.production_signal["contract_set"]["dataset_snapshot_sha256"]
+    )
+    assert (
+        replayed.production_signal["target_positions"]
+        == baseline.production_signal["target_positions"]
+    )
+
+
+def test_loaded_snapshot_is_unchanged_after_source_file_mutation(
+    tmp_path: Path,
+) -> None:
+    copied_fixture = tmp_path / "vertical-slice"
+    shutil.copytree(FIXTURE_ROOT, copied_fixture)
+    documents = load_documents()
+    snapshot = load_dataset_snapshot(
+        dataset_manifest=documents["dataset-manifest"],
+        dataset_root=copied_fixture,
+        as_of=date(2026, 7, 29),
+    )
+    expected_records = snapshot.records
+    expected_hash = snapshot.snapshot_sha256
+
+    (copied_fixture / "daily-bars.json").write_text("[]", encoding="utf-8")
+
+    assert snapshot.records == expected_records
+    assert snapshot.snapshot_sha256 == expected_hash
+
+
+def test_dataset_artifact_is_read_once_for_hash_and_parse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_read_bytes = Path.read_bytes
+    calls = 0
+
+    def counted_read_bytes(path: Path) -> bytes:
+        nonlocal calls
+        if path.name == "daily-bars.json":
+            calls += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+    documents = load_documents()
+
+    load_dataset_snapshot(
+        dataset_manifest=documents["dataset-manifest"],
+        dataset_root=FIXTURE_ROOT,
+        as_of=date(2026, 7, 29),
+    )
+
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value", "expected_reason"),
+    [
+        (
+            ("dataset-manifest", "dataset_family_id"),
+            "different-family/v1",
+            "CHAMPION_DATASET_FAMILY_MISMATCH",
+        ),
+        (
+            ("dataset-manifest", "normalization_version"),
+            "different-normalizer/v1",
+            "CHAMPION_NORMALIZATION_VERSION_MISMATCH",
+        ),
+        (
+            ("dataset-manifest", "data_schema_sha256"),
+            "e" * 64,
+            "CHAMPION_DATA_SCHEMA_MISMATCH",
+        ),
+        (
+            ("universe", "universe_policy_id"),
+            "different-policy",
+            "CHAMPION_UNIVERSE_POLICY_MISMATCH",
+        ),
+        (
+            ("universe", "universe_policy_version"),
+            "v2",
+            "CHAMPION_UNIVERSE_POLICY_VERSION_MISMATCH",
+        ),
+    ],
+)
+def test_champion_rejects_incompatible_snapshot_policy(
+    field_path: tuple[str, str],
+    value: str,
+    expected_reason: str,
+) -> None:
+    previous = build_fixture_run().production_signal
+    documents = load_documents()
+    documents[field_path[0]][field_path[1]] = value
+
+    result = build_fixture_run(
+        documents=documents,
+        previous_signal=previous,
+        previous_signal_sha256=canonical_json_sha256(previous),
+    )
+
+    assert result.production_signal["state"] == "HOLD"
+    assert expected_reason in result.production_signal["reason_codes"]

@@ -1,13 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.ashare-pilot.local/universe/1.0.0",
-  "title": "Point-in-time Universe",
+  "$id": "https://contracts.ashare-pilot.local/universe/2.0.0",
+  "title": "Point-in-time Universe Snapshot",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "contract_id",
     "schema_version",
     "universe_id",
+    "universe_policy_id",
+    "universe_policy_version",
     "as_of",
     "generated_at",
     "source",
@@ -17,8 +19,10 @@
   ],
   "properties": {
     "contract_id": {"const": "universe"},
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "universe_id": {"type": "string", "pattern": "^[a-z0-9-]+-pit/v[0-9]+$"},
+    "universe_policy_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "universe_policy_version": {"type": "string", "pattern": "^v[0-9]+$"},
     "as_of": {"type": "string", "format": "date"},
     "generated_at": {"type": "string", "format": "date-time"},
     "source": {"type": "string", "minLength": 1, "maxLength": 80},
@@ -30,7 +34,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["symbol", "valid_from", "eligible", "reason_codes"],
+        "required": ["symbol", "valid_from", "valid_to", "eligible", "reason_codes"],
         "properties": {
           "symbol": {"type": "string", "pattern": "^[0-9]{6}\\.(SZ|SH|BJ)$"},
           "valid_from": {"type": "string", "format": "date"},
