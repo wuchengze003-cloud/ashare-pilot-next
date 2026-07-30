@@ -6,9 +6,9 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from ashare_quant_core import TargetPosition
+from ashare_quant_core import RiskAction, TargetPosition
 from ashare_signal_runner import (
-    build_active_run,
+    build_run,
     canonical_json_bytes,
     canonical_json_sha256,
     publish_run,
@@ -148,18 +148,26 @@ def build_fixture_run(
     documents: dict[str, dict[str, object]] | None = None,
     strategy: FixtureReferenceStrategy | None = None,
     lockfile_sha256: str = "3" * 64,
+    as_of: date = date(2026, 7, 29),
+    generated_at: datetime = datetime(2026, 7, 29, 8, 10, tzinfo=UTC),
+    previous_signal: dict[str, object] | None = None,
+    previous_signal_sha256: str | None = None,
+    risk_action: RiskAction = RiskAction.NONE,
 ):
-    return build_active_run(
+    return build_run(
         strategy=strategy or reference_strategy(),
-        as_of=date(2026, 7, 29),
-        generated_at=datetime(2026, 7, 29, 8, 10, tzinfo=UTC),
-        signal_id="fixture-signal-2026-07-29",
-        run_id="fixture-run-2026-07-29",
+        as_of=as_of,
+        generated_at=generated_at,
+        signal_id=f"fixture-signal-{as_of.isoformat()}",
+        run_id=f"fixture-run-{as_of.isoformat()}",
         git_sha="1" * 40,
         lockfile_sha256=lockfile_sha256,
         dataset_root=dataset_root,
         documents=documents or load_documents(),
         schemas=load_schemas(),
+        previous_signal=previous_signal,
+        previous_signal_sha256=previous_signal_sha256,
+        risk_action=risk_action,
     )
 
 
@@ -290,17 +298,37 @@ def mutate_bound_contract(
 
 
 @pytest.mark.parametrize("contract_id", sorted(PROMOTION_CONTRACT_FIELDS))
-def test_champion_rejects_drift_from_promoted_contract_set(contract_id: str) -> None:
+def test_champion_contract_drift_holds_verified_previous_target(
+    contract_id: str,
+) -> None:
+    previous = build_fixture_run().production_signal
     documents = load_documents()
     mutate_bound_contract(documents, contract_id=contract_id)
 
-    with pytest.raises(ValueError, match=f"current {contract_id}"):
-        build_fixture_run(documents=documents)
+    result = build_fixture_run(
+        documents=documents,
+        previous_signal=previous,
+        previous_signal_sha256=canonical_json_sha256(previous),
+    )
+
+    assert result.production_signal["state"] == "HOLD"
+    assert result.production_signal["target_positions"] == previous["target_positions"]
+    expected_reason = f"CHAMPION_{contract_id.replace('-', '_').upper()}_MISMATCH"
+    assert expected_reason in result.production_signal["reason_codes"]
 
 
-def test_champion_rejects_lockfile_drift() -> None:
-    with pytest.raises(ValueError, match="current lockfile"):
-        build_fixture_run(lockfile_sha256="4" * 64)
+def test_champion_lockfile_drift_holds_verified_previous_target() -> None:
+    previous = build_fixture_run().production_signal
+
+    result = build_fixture_run(
+        lockfile_sha256="4" * 64,
+        previous_signal=previous,
+        previous_signal_sha256=canonical_json_sha256(previous),
+    )
+
+    assert result.production_signal["state"] == "HOLD"
+    assert result.production_signal["target_positions"] == previous["target_positions"]
+    assert "CHAMPION_LOCKFILE_MISMATCH" in result.production_signal["reason_codes"]
 
 
 def test_champion_requires_complete_promotion_contract_set() -> None:
@@ -324,11 +352,18 @@ def test_champion_rejects_declared_adapter_drift(
     adapter_field: str,
     adapter_value: str,
 ) -> None:
+    previous = build_fixture_run().production_signal
     strategy = reference_strategy()
     setattr(strategy, adapter_field, adapter_value)
 
-    with pytest.raises(ValueError, match=adapter_field):
-        build_fixture_run(strategy=strategy)
+    result = build_fixture_run(
+        strategy=strategy,
+        previous_signal=previous,
+        previous_signal_sha256=canonical_json_sha256(previous),
+    )
+
+    assert result.production_signal["state"] == "HOLD"
+    assert result.production_signal["target_positions"] == previous["target_positions"]
 
 
 def test_champion_rejects_strategy_without_adapter_identity() -> None:
@@ -345,8 +380,105 @@ def test_champion_rejects_strategy_without_adapter_identity() -> None:
         ) -> tuple[TargetPosition, ...]:
             return ()
 
-    with pytest.raises(ValueError, match="adapter_id"):
-        build_fixture_run(strategy=UndeclaredAdapter())
+    previous = build_fixture_run().production_signal
+    result = build_fixture_run(
+        strategy=UndeclaredAdapter(),
+        previous_signal=previous,
+        previous_signal_sha256=canonical_json_sha256(previous),
+    )
+
+    assert result.production_signal["state"] == "HOLD"
+    assert "CHAMPION_ADAPTER_ID_MISMATCH" in result.production_signal["reason_codes"]
+    assert (
+        "CHAMPION_ADAPTER_HASH_MISMATCH"
+        in result.production_signal["reason_codes"]
+    )
+
+
+def test_no_champion_builds_initial_flat_without_running_strategy() -> None:
+    class MustNotRun:
+        strategy_id = "must-not-run"
+        strategy_version = "v1"
+        adapter_id = "must-not-run/v1"
+        adapter_sha256 = "f" * 64
+
+        def target_positions(self, **_: object) -> tuple[TargetPosition, ...]:
+            raise AssertionError("strategy must not run without a champion")
+
+    documents = load_documents()
+    documents.pop("champion")
+    result = build_fixture_run(documents=documents, strategy=MustNotRun())
+
+    assert result.production_signal["state"] == "FLAT"
+    assert result.production_signal["champion"] is None
+    assert result.production_signal["target_positions"] == []
+    assert result.production_signal["reason_codes"] == [
+        "CHAMPION_NEVER_ACTIVATED"
+    ]
+
+
+def test_missing_current_champion_holds_last_verified_target() -> None:
+    previous = build_fixture_run().production_signal
+    documents = load_documents()
+    documents.pop("champion")
+
+    result = build_fixture_run(
+        documents=documents,
+        previous_signal=previous,
+        previous_signal_sha256=canonical_json_sha256(previous),
+    )
+
+    assert result.production_signal["state"] == "HOLD"
+    assert result.production_signal["champion"] == previous["champion"]
+    assert result.production_signal["target_positions"] == previous["target_positions"]
+    assert result.production_signal["reason_codes"] == ["CHAMPION_MISSING"]
+
+
+def test_stale_decision_data_holds_last_verified_target() -> None:
+    previous = build_fixture_run().production_signal
+
+    result = build_fixture_run(
+        as_of=date(2026, 7, 30),
+        generated_at=datetime(2026, 7, 30, 8, 10, tzinfo=UTC),
+        previous_signal=previous,
+        previous_signal_sha256=canonical_json_sha256(previous),
+    )
+
+    assert result.production_signal["state"] == "HOLD"
+    assert result.production_signal["latest_complete_date"] == "2026-07-29"
+    assert result.production_signal["target_positions"] == previous["target_positions"]
+    assert "DATASET_STALE" in result.production_signal["reason_codes"]
+    assert "UNIVERSE_STALE" in result.production_signal["reason_codes"]
+
+
+def test_degraded_run_without_previous_signal_fails_closed() -> None:
+    with pytest.raises(ValueError, match="HOLD requires a verified previous signal"):
+        build_fixture_run(
+            as_of=date(2026, 7, 30),
+            generated_at=datetime(2026, 7, 30, 8, 10, tzinfo=UTC),
+        )
+
+
+def test_risk_actions_flow_through_production_pipeline() -> None:
+    previous = build_fixture_run().production_signal
+    previous_hash = canonical_json_sha256(previous)
+
+    reduce_result = build_fixture_run(
+        previous_signal=previous,
+        previous_signal_sha256=previous_hash,
+        risk_action=RiskAction.REDUCE,
+    )
+    flat_result = build_fixture_run(
+        previous_signal=previous,
+        previous_signal_sha256=previous_hash,
+        risk_action=RiskAction.FLAT,
+    )
+
+    assert reduce_result.production_signal["state"] == "REDUCE_ONLY"
+    assert reduce_result.production_signal["reason_codes"] == ["RISK_REDUCE"]
+    assert flat_result.production_signal["state"] == "FLAT"
+    assert flat_result.production_signal["target_positions"] == []
+    assert flat_result.production_signal["reason_codes"] == ["RISK_FLAT"]
 
 
 def test_future_rows_do_not_change_historical_reference_target() -> None:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from ashare_quant_core import ChampionHealth, HealthSnapshot, RiskAction, TargetPosition
-from ashare_signal_runner import (
+from ashare_signal_runner.runner import (
     ChampionRef,
     ContractSet,
     SignalInputs,

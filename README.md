@@ -45,6 +45,7 @@
 - [依赖方向](docs/architecture/DEPENDENCY_RULES.md)
 - [降级状态机](docs/architecture/STATE_MACHINE.md)
 - [迁移政策](docs/architecture/MIGRATION_POLICY.md)
+- [生产底座收口清单](docs/architecture/FOUNDATION_CLOSURE.md)
 - [首期验收标准](docs/architecture/ACCEPTANCE.md)
 
 ## 本地验证
