@@ -800,6 +800,7 @@ def load_current_run(
     *,
     runs_root: Path,
     head_path: Path,
+    required_as_of: date,
     schemas: Mapping[str, Mapping[str, Any]],
 ) -> RunArtifacts | None:
     """Resolve the only consumer-visible run through the committed head."""
@@ -813,6 +814,8 @@ def load_current_run(
     )
     if artifacts.signal_head_bytes != head_bytes:
         raise ValueError("current signal head does not match its committed run")
+    if date.fromisoformat(str(artifacts.production_signal["as_of"])) != required_as_of:
+        raise ValueError("current production signal is stale for required_as_of")
     return artifacts
 
 

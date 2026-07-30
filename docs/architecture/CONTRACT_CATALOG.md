@@ -6,6 +6,7 @@
 |---|---|---|---|
 | Dataset Manifest | Data Gateway | Research、Signal Runner | 不读取数据集 |
 | Universe | Data Gateway/受控成员任务 | Research、Signal Runner | 阻断候选或推理 |
+| Coverage Audit | Data Gateway | Ops、Research治理 | 阻断不完整历史数据集 |
 | Cost Model | 架构负责人 | quant_core | 无唯一日期/市场费率段时阻断回测和推理 |
 | Market Rules | 架构负责人 | quant_core | 阻断相关证券 |
 | Execution Policy | 架构负责人 | quant_core | 阻断回测和目标生成 |
@@ -27,6 +28,13 @@
   `DatasetSnapshot`；策略不能获得数据目录、路径或文件句柄。
 - `DatasetSnapshot`只包含`trade_date <= as_of`的记录，其哈希由数据族、日期、
   Schema、标准化版本和规范化可见记录生成。
+
+## Coverage Audit 1.0
+
+- 逐个开放交易日重建点时成员，并用证券上市、退市日期截断有效范围。
+- 每个预期成员日必须有行情或明确停牌证明；零观测成员不得被静默跳过。
+- 可选的成员数量约束逐日执行，异常日期作为结构化证据输出。
+- 审计数字由当前输入实时生成，不接受旧报告数字作为通过依据。
 
 ## Universe 2.0
 

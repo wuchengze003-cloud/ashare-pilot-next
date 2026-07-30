@@ -42,4 +42,5 @@ Data Gateway不定义策略，Research不发布未晋级策略，Signal Runner�
 - [依赖规则](DEPENDENCY_RULES.md)
 - [状态机](STATE_MACHINE.md)
 - [迁移政策](MIGRATION_POLICY.md)
+- [实证能力重建记录](EVIDENCE_REIMPLEMENTATION.md)
 - [首期验收标准](ACCEPTANCE.md)

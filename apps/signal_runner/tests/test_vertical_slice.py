@@ -303,6 +303,7 @@ def test_vertical_slice_is_byte_deterministic_and_manifest_binds_output(
     assert load_current_run(
         runs_root=runs_root,
         head_path=head_path,
+        required_as_of=date(2026, 7, 29),
         schemas=load_schemas(),
     ) == first
 
@@ -899,6 +900,7 @@ def test_publisher_rejects_fork_from_stale_committed_head(tmp_path: Path) -> Non
     assert load_current_run(
         runs_root=runs_root,
         head_path=head_path,
+        required_as_of=date(2026, 7, 29),
         schemas=schemas,
     ) == second
 
@@ -915,6 +917,7 @@ def test_uncommitted_directory_is_never_consumer_visible(tmp_path: Path) -> None
     assert load_current_run(
         runs_root=tmp_path / "runs",
         head_path=tmp_path / "current-signal-head.json",
+        required_as_of=date(2026, 7, 29),
         schemas=schemas,
     ) is None
 
@@ -980,6 +983,7 @@ def test_publication_retry_recovers_after_run_directory_fsync_failure(
     assert load_current_run(
         runs_root=runs_root,
         head_path=head_path,
+        required_as_of=date(2026, 7, 29),
         schemas=schemas,
     ) == run
 
@@ -1023,5 +1027,29 @@ def test_publication_retry_recovers_after_head_fsync_failure(
     assert load_current_run(
         runs_root=runs_root,
         head_path=head_path,
+        required_as_of=date(2026, 7, 29),
         schemas=schemas,
     ) == run
+
+
+def test_current_signal_fails_closed_for_a_new_required_trade_date(
+    tmp_path: Path,
+) -> None:
+    schemas = load_schemas()
+    run = build_fixture_run()
+    runs_root = tmp_path / "runs"
+    head_path = tmp_path / "current-signal-head.json"
+    publish_run(
+        output_dir=runs_root / str(run.signal_head["run_id"]),
+        head_path=head_path,
+        artifacts=run,
+        schemas=schemas,
+    )
+
+    with pytest.raises(ValueError, match="stale"):
+        load_current_run(
+            runs_root=runs_root,
+            head_path=head_path,
+            required_as_of=date(2026, 7, 30),
+            schemas=schemas,
+        )

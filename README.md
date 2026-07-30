@@ -10,7 +10,9 @@
 合成数据最小闭环已经验证到`Runtime Manifest`：输入文件内容只读取一次并构造
 不可变Dataset/Universe快照，合同、Champion、成本、市场规则、执行规则、组合
 风险和锁文件均绑定哈希；Signal Runner在输出前执行点时Universe与组合约束，并
-以原子目录方式发布。测试专用参考策略只存在于测试代码，不属于正式策略，也不能
+先提交不可变运行目录、再原子切换当前信号链头。Research的点时特征重放、
+Data Gateway的历史成员覆盖和交易日新鲜度均已用合成数据完成正反验证。测试专用
+参考策略只存在于测试代码，不属于正式策略，也不能
 参与晋级。生产入口不接受任意策略对象，只能加载Champion绑定且内容哈希通过的
 不可变适配器包。
 
@@ -48,6 +50,7 @@
 - [降级状态机](docs/architecture/STATE_MACHINE.md)
 - [迁移政策](docs/architecture/MIGRATION_POLICY.md)
 - [生产底座收口清单](docs/architecture/FOUNDATION_CLOSURE.md)
+- [实证能力重建记录](docs/architecture/EVIDENCE_REIMPLEMENTATION.md)
 - [首期验收标准](docs/architecture/ACCEPTANCE.md)
 
 ## 本地验证

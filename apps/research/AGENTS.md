@@ -6,3 +6,4 @@
   selection history are immutable evidence.
 - Do not import Signal Runner or Web.
 - Notebooks and generated experiment output are not tracked in Git.
+- Feature replay must consume immutable point-in-time snapshots and reject future rows.
