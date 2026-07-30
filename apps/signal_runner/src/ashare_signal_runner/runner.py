@@ -13,7 +13,6 @@ from typing import Any
 from ashare_quant_core import (
     ChampionHealth,
     HealthSnapshot,
-    RiskAction,
     RuntimeState,
     TargetPosition,
     resolve_state,
@@ -89,11 +88,6 @@ def canonical_json_bytes(document: Mapping[str, Any]) -> bytes:
 def canonical_json_sha256(document: Mapping[str, Any]) -> str:
     """Hash a JSON object using its stable representation."""
     return hashlib.sha256(canonical_json_bytes(document)).hexdigest()
-
-
-def canonical_signal_sha256(document: Mapping[str, Any]) -> str:
-    """Backward-compatible signal-specific alias for the canonical JSON hash."""
-    return canonical_json_sha256(document)
 
 
 def _positions_from_document(document: Mapping[str, Any]) -> tuple[TargetPosition, ...]:
@@ -196,7 +190,7 @@ def build_production_signal(
         if previous_generated_at >= inputs.generated_at:
             raise ValueError("previous signal generated_at must be earlier than current")
         previous_positions = _positions_from_document(inputs.previous_signal)
-        actual_previous_hash = canonical_signal_sha256(inputs.previous_signal)
+        actual_previous_hash = canonical_json_sha256(inputs.previous_signal)
         if actual_previous_hash != inputs.previous_signal_sha256:
             raise ValueError("previous signal hash does not match expected hash")
         previous_signal_sha256 = inputs.previous_signal_sha256
@@ -236,23 +230,3 @@ def build_production_signal(
     }
     _validate_schema(signal, schema)
     return signal
-
-
-def build_initial_flat_signal(
-    inputs: SignalInputs,
-    *,
-    schema: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Publish the canonical no-champion state and no other kind of FLAT."""
-    if (
-        inputs.health.champion is not ChampionHealth.NEVER_ACTIVATED
-        or inputs.health.risk_action is not RiskAction.NONE
-        or inputs.champion is not None
-        or inputs.sequence != 1
-        or inputs.previous_head_sha256 is not None
-        or inputs.previous_signal_sha256 is not None
-        or inputs.previous_signal is not None
-        or inputs.target_positions
-    ):
-        raise ValueError("initial FLAT is only valid before any champion is activated")
-    return build_production_signal(inputs, schema=schema)
