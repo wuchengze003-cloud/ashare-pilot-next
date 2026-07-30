@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/signal-head/1.0.0",
+  "title": "Signal Head",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "sequence",
+    "run_id",
+    "signal_id",
+    "signal_sha256",
+    "previous_head_sha256",
+    "as_of",
+    "generated_at"
+  ],
+  "properties": {
+    "contract_id": {"const": "signal-head"},
+    "schema_version": {"const": "1.0.0"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "run_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "signal_id": {"type": "string", "minLength": 3, "maxLength": 160},
+    "signal_sha256": {"$ref": "#/$defs/sha256"},
+    "previous_head_sha256": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/sha256"}
+      ]
+    },
+    "as_of": {"type": "string", "format": "date"},
+    "generated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "sequence": {"const": 1}
+        },
+        "required": ["sequence"]
+      },
+      "then": {
+        "properties": {
+          "previous_head_sha256": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "previous_head_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    }
+  ]
+}

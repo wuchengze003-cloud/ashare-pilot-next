@@ -3,15 +3,19 @@ import inspect
 import json
 import shutil
 import subprocess
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import ashare_signal_runner.pipeline as pipeline_module
 import pytest
 from ashare_quant_core import RiskAction
 from ashare_signal_runner import (
+    RunArtifacts,
     build_run,
     canonical_json_bytes,
     canonical_json_sha256,
+    load_committed_run,
+    load_current_run,
     publish_run,
 )
 from ashare_signal_runner.snapshots import load_dataset_snapshot
@@ -92,24 +96,38 @@ def build_fixture_run(
     adapter_root: Path = ADAPTER_ROOT,
     deployment_git_sha: str = DEPLOYMENT_GIT_SHA,
     as_of: date = date(2026, 7, 29),
-    generated_at: datetime = datetime(2026, 7, 29, 8, 10, tzinfo=UTC),
-    previous_signal: dict[str, object] | None = None,
-    previous_signal_sha256: str | None = None,
+    generated_at: datetime | None = None,
+    previous_run: RunArtifacts | None = None,
     risk_action: RiskAction = RiskAction.NONE,
 ):
+    if generated_at is None:
+        if previous_run is None:
+            generated_at = datetime(2026, 7, 29, 8, 10, tzinfo=UTC)
+        else:
+            previous_generated_at = datetime.fromisoformat(
+                str(previous_run.production_signal["generated_at"]).replace(
+                    "Z", "+00:00"
+                )
+            )
+            generated_at = previous_generated_at.replace(microsecond=0) + timedelta(
+                seconds=1
+            )
+    run_suffix = generated_at.strftime("%Y%m%dT%H%M%S")
     return build_run(
         as_of=as_of,
         generated_at=generated_at,
-        signal_id=f"fixture-signal-{as_of.isoformat()}",
-        run_id=f"fixture-run-{as_of.isoformat()}",
+        signal_id=f"fixture-signal-{run_suffix}",
+        run_id=f"fixture-run-{run_suffix}",
         deployment_git_sha=deployment_git_sha,
         repository_root=ROOT,
         adapter_root=adapter_root,
         dataset_root=dataset_root,
         documents=documents or load_documents(),
         schemas=load_schemas(),
-        previous_signal=previous_signal,
-        previous_signal_sha256=previous_signal_sha256,
+        previous_signal=(
+            previous_run.production_signal if previous_run is not None else None
+        ),
+        previous_head=previous_run.signal_head if previous_run is not None else None,
         risk_action=risk_action,
     )
 
@@ -259,15 +277,41 @@ def test_vertical_slice_is_byte_deterministic_and_manifest_binds_output(
     assert runtime_inputs["lockfile"] == LOCKFILE_SHA256
     assert first.runtime_manifest["git_sha"] == DEPLOYMENT_GIT_SHA
 
-    output_dir = tmp_path / "fixture-run"
-    publish_run(output_dir=output_dir, artifacts=first)
+    runs_root = tmp_path / "runs"
+    output_dir = runs_root / str(first.signal_head["run_id"])
+    head_path = tmp_path / "current-signal-head.json"
+    publish_run(
+        output_dir=output_dir,
+        head_path=head_path,
+        artifacts=first,
+        schemas=load_schemas(),
+    )
     signal_bytes = (output_dir / "production-signal.json").read_bytes()
     manifest = json.loads((output_dir / "runtime-manifest.json").read_text())
-    assert hashlib.sha256(signal_bytes).hexdigest() == manifest["outputs"][0]["sha256"]
-    assert not (tmp_path / ".fixture-run.tmp").exists()
+    output_hashes = {
+        item["artifact_id"]: item["sha256"] for item in manifest["outputs"]
+    }
+    assert hashlib.sha256(signal_bytes).hexdigest() == output_hashes[
+        "production-signal"
+    ]
+    assert (output_dir / "COMMITTED").is_file()
+    assert not (runs_root / f".{output_dir.name}.tmp").exists()
+    assert load_committed_run(
+        output_dir=output_dir,
+        schemas=load_schemas(),
+    ) == first
+    assert load_current_run(
+        runs_root=runs_root,
+        head_path=head_path,
+        schemas=load_schemas(),
+    ) == first
 
-    with pytest.raises(FileExistsError, match="already exists"):
-        publish_run(output_dir=output_dir, artifacts=first)
+    publish_run(
+        output_dir=output_dir,
+        head_path=head_path,
+        artifacts=first,
+        schemas=load_schemas(),
+    )
 
 
 def test_deployment_git_sha_must_match_checked_out_repository() -> None:
@@ -425,14 +469,14 @@ def mutate_bound_contract(
 def test_champion_contract_drift_holds_verified_previous_target(
     contract_id: str,
 ) -> None:
-    previous = build_fixture_run().production_signal
+    previous_run = build_fixture_run()
+    previous = previous_run.production_signal
     documents = load_documents()
     mutate_bound_contract(documents, contract_id=contract_id)
 
     result = build_fixture_run(
         documents=documents,
-        previous_signal=previous,
-        previous_signal_sha256=canonical_json_sha256(previous),
+        previous_run=previous_run,
     )
 
     assert result.production_signal["state"] == "HOLD"
@@ -442,7 +486,8 @@ def test_champion_contract_drift_holds_verified_previous_target(
 
 
 def test_champion_lockfile_drift_holds_verified_previous_target() -> None:
-    previous = build_fixture_run().production_signal
+    previous_run = build_fixture_run()
+    previous = previous_run.production_signal
     documents = load_documents()
     fixed_contract_set = documents["champion"]["fixed_contract_set"]
     assert isinstance(fixed_contract_set, dict)
@@ -450,8 +495,7 @@ def test_champion_lockfile_drift_holds_verified_previous_target() -> None:
 
     result = build_fixture_run(
         documents=documents,
-        previous_signal=previous,
-        previous_signal_sha256=canonical_json_sha256(previous),
+        previous_run=previous_run,
     )
 
     assert result.production_signal["state"] == "HOLD"
@@ -480,14 +524,14 @@ def test_champion_rejects_declared_adapter_drift(
     adapter_field: str,
     adapter_value: str,
 ) -> None:
-    previous = build_fixture_run().production_signal
+    previous_run = build_fixture_run()
+    previous = previous_run.production_signal
     documents = load_documents()
     documents["champion"][adapter_field] = adapter_value
 
     result = build_fixture_run(
         documents=documents,
-        previous_signal=previous,
-        previous_signal_sha256=canonical_json_sha256(previous),
+        previous_run=previous_run,
     )
 
     assert result.production_signal["state"] == "HOLD"
@@ -496,7 +540,7 @@ def test_champion_rejects_declared_adapter_drift(
 
 
 def test_adapter_code_tampering_holds_without_execution(tmp_path: Path) -> None:
-    previous = build_fixture_run().production_signal
+    previous_run = build_fixture_run()
     copied_adapters = tmp_path / "approved-adapters"
     shutil.copytree(ADAPTER_ROOT, copied_adapters)
     code_path = (
@@ -511,8 +555,7 @@ def test_adapter_code_tampering_holds_without_execution(tmp_path: Path) -> None:
 
     result = build_fixture_run(
         adapter_root=copied_adapters,
-        previous_signal=previous,
-        previous_signal_sha256=canonical_json_sha256(previous),
+        previous_run=previous_run,
     )
 
     assert result.production_signal["state"] == "HOLD"
@@ -538,14 +581,14 @@ def test_no_champion_builds_initial_flat_without_loading_adapter(
 
 
 def test_missing_current_champion_holds_last_verified_target() -> None:
-    previous = build_fixture_run().production_signal
+    previous_run = build_fixture_run()
+    previous = previous_run.production_signal
     documents = load_documents()
     documents.pop("champion")
 
     result = build_fixture_run(
         documents=documents,
-        previous_signal=previous,
-        previous_signal_sha256=canonical_json_sha256(previous),
+        previous_run=previous_run,
     )
 
     assert result.production_signal["state"] == "HOLD"
@@ -555,13 +598,13 @@ def test_missing_current_champion_holds_last_verified_target() -> None:
 
 
 def test_stale_decision_data_holds_last_verified_target() -> None:
-    previous = build_fixture_run().production_signal
+    previous_run = build_fixture_run()
+    previous = previous_run.production_signal
 
     result = build_fixture_run(
         as_of=date(2026, 7, 30),
         generated_at=datetime(2026, 7, 30, 8, 10, tzinfo=UTC),
-        previous_signal=previous,
-        previous_signal_sha256=canonical_json_sha256(previous),
+        previous_run=previous_run,
     )
 
     assert result.production_signal["state"] == "HOLD"
@@ -580,17 +623,14 @@ def test_degraded_run_without_previous_signal_fails_closed() -> None:
 
 
 def test_risk_actions_flow_through_production_pipeline() -> None:
-    previous = build_fixture_run().production_signal
-    previous_hash = canonical_json_sha256(previous)
+    previous_run = build_fixture_run()
 
     reduce_result = build_fixture_run(
-        previous_signal=previous,
-        previous_signal_sha256=previous_hash,
+        previous_run=previous_run,
         risk_action=RiskAction.REDUCE,
     )
     flat_result = build_fixture_run(
-        previous_signal=previous,
-        previous_signal_sha256=previous_hash,
+        previous_run=previous_run,
         risk_action=RiskAction.FLAT,
     )
 
@@ -769,15 +809,219 @@ def test_champion_rejects_incompatible_snapshot_policy(
     value: str,
     expected_reason: str,
 ) -> None:
-    previous = build_fixture_run().production_signal
+    previous_run = build_fixture_run()
     documents = load_documents()
     documents[field_path[0]][field_path[1]] = value
 
     result = build_fixture_run(
         documents=documents,
-        previous_signal=previous,
-        previous_signal_sha256=canonical_json_sha256(previous),
+        previous_run=previous_run,
     )
 
     assert result.production_signal["state"] == "HOLD"
     assert expected_reason in result.production_signal["reason_codes"]
+
+
+def test_signal_chain_advances_one_sequence_and_binds_both_hashes() -> None:
+    first = build_fixture_run()
+    second = build_fixture_run(previous_run=first)
+
+    assert first.production_signal["sequence"] == 1
+    assert second.production_signal["sequence"] == 2
+    assert second.production_signal["previous_signal_sha256"] == canonical_json_sha256(
+        first.production_signal
+    )
+    assert second.production_signal["previous_head_sha256"] == canonical_json_sha256(
+        first.signal_head
+    )
+    assert second.signal_head["previous_head_sha256"] == canonical_json_sha256(
+        first.signal_head
+    )
+
+
+def test_signal_head_must_reference_the_exact_previous_signal() -> None:
+    first = build_fixture_run()
+    tampered_head = first.signal_head
+    tampered_head["signal_sha256"] = "0" * 64
+    tampered = RunArtifacts(
+        production_signal_bytes=first.production_signal_bytes,
+        runtime_manifest_bytes=first.runtime_manifest_bytes,
+        signal_head_bytes=canonical_json_bytes(tampered_head),
+        expected_previous_head_sha256=first.expected_previous_head_sha256,
+    )
+
+    with pytest.raises(ValueError, match="does not reference"):
+        build_fixture_run(previous_run=tampered)
+
+
+def test_future_signal_cannot_be_used_as_previous_chain_head() -> None:
+    first = build_fixture_run()
+
+    with pytest.raises(ValueError, match="as_of cannot be later"):
+        build_fixture_run(
+            previous_run=first,
+            as_of=date(2026, 7, 28),
+            generated_at=datetime(2026, 7, 30, 8, 10, tzinfo=UTC),
+        )
+
+
+def test_publisher_rejects_fork_from_stale_committed_head(tmp_path: Path) -> None:
+    schemas = load_schemas()
+    runs_root = tmp_path / "runs"
+    head_path = tmp_path / "current-signal-head.json"
+    first = build_fixture_run()
+    second = build_fixture_run(previous_run=first)
+    stale_fork = build_fixture_run(
+        previous_run=first,
+        generated_at=datetime(2026, 7, 29, 8, 10, 2, tzinfo=UTC),
+    )
+    publish_run(
+        output_dir=runs_root / str(first.signal_head["run_id"]),
+        head_path=head_path,
+        artifacts=first,
+        schemas=schemas,
+    )
+    publish_run(
+        output_dir=runs_root / str(second.signal_head["run_id"]),
+        head_path=head_path,
+        artifacts=second,
+        schemas=schemas,
+    )
+
+    with pytest.raises(RuntimeError, match="changed since"):
+        publish_run(
+            output_dir=runs_root / str(stale_fork.signal_head["run_id"]),
+            head_path=head_path,
+            artifacts=stale_fork,
+            schemas=schemas,
+        )
+
+    assert load_current_run(
+        runs_root=runs_root,
+        head_path=head_path,
+        schemas=schemas,
+    ) == second
+
+
+def test_uncommitted_directory_is_never_consumer_visible(tmp_path: Path) -> None:
+    schemas = load_schemas()
+    run = build_fixture_run()
+    output_dir = tmp_path / "runs" / str(run.signal_head["run_id"])
+    output_dir.mkdir(parents=True)
+    (output_dir / "production-signal.json").write_bytes(run.production_signal_bytes)
+
+    with pytest.raises(ValueError, match="missing or unexpected"):
+        load_committed_run(output_dir=output_dir, schemas=schemas)
+    assert load_current_run(
+        runs_root=tmp_path / "runs",
+        head_path=tmp_path / "current-signal-head.json",
+        schemas=schemas,
+    ) is None
+
+
+def test_run_artifact_views_cannot_mutate_published_bytes(tmp_path: Path) -> None:
+    schemas = load_schemas()
+    run = build_fixture_run()
+    mutable_view = run.production_signal
+    mutable_view["state"] = "FLAT"
+
+    output_dir = tmp_path / "runs" / str(run.signal_head["run_id"])
+    head_path = tmp_path / "current-signal-head.json"
+    publish_run(
+        output_dir=output_dir,
+        head_path=head_path,
+        artifacts=run,
+        schemas=schemas,
+    )
+
+    assert load_committed_run(
+        output_dir=output_dir,
+        schemas=schemas,
+    ).production_signal["state"] == "ACTIVE"
+
+
+def test_publication_retry_recovers_after_run_directory_fsync_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schemas = load_schemas()
+    run = build_fixture_run()
+    runs_root = tmp_path / "runs"
+    output_dir = runs_root / str(run.signal_head["run_id"])
+    head_path = tmp_path / "current-signal-head.json"
+    original_fsync = pipeline_module._fsync_directory
+    calls = 0
+
+    def fail_after_run_rename(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected parent fsync failure")
+        original_fsync(path)
+
+    monkeypatch.setattr(pipeline_module, "_fsync_directory", fail_after_run_rename)
+    with pytest.raises(OSError, match="injected"):
+        publish_run(
+            output_dir=output_dir,
+            head_path=head_path,
+            artifacts=run,
+            schemas=schemas,
+        )
+
+    assert output_dir.is_dir()
+    assert not head_path.exists()
+    monkeypatch.setattr(pipeline_module, "_fsync_directory", original_fsync)
+    publish_run(
+        output_dir=output_dir,
+        head_path=head_path,
+        artifacts=run,
+        schemas=schemas,
+    )
+    assert load_current_run(
+        runs_root=runs_root,
+        head_path=head_path,
+        schemas=schemas,
+    ) == run
+
+
+def test_publication_retry_recovers_after_head_fsync_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schemas = load_schemas()
+    run = build_fixture_run()
+    runs_root = tmp_path / "runs"
+    output_dir = runs_root / str(run.signal_head["run_id"])
+    head_path = tmp_path / "current-signal-head.json"
+    original_fsync = pipeline_module._fsync_directory
+    calls = 0
+
+    def fail_after_head_replace(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise OSError("injected head fsync failure")
+        original_fsync(path)
+
+    monkeypatch.setattr(pipeline_module, "_fsync_directory", fail_after_head_replace)
+    with pytest.raises(OSError, match="injected"):
+        publish_run(
+            output_dir=output_dir,
+            head_path=head_path,
+            artifacts=run,
+            schemas=schemas,
+        )
+
+    assert head_path.is_file()
+    monkeypatch.setattr(pipeline_module, "_fsync_directory", original_fsync)
+    publish_run(
+        output_dir=output_dir,
+        head_path=head_path,
+        artifacts=run,
+        schemas=schemas,
+    )
+    assert load_current_run(
+        runs_root=runs_root,
+        head_path=head_path,
+        schemas=schemas,
+    ) == run

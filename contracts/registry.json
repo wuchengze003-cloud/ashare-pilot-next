@@ -62,6 +62,11 @@
       ]
     },
     {
+      "contract_id": "signal-head",
+      "schema": "schemas/signal-head.schema.json",
+      "examples": ["examples/signal-head.example.json"]
+    },
+    {
       "contract_id": "runtime-manifest",
       "schema": "schemas/runtime-manifest.schema.json",
       "examples": ["examples/runtime-manifest.example.json"]

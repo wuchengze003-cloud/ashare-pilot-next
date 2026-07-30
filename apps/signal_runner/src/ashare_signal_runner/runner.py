@@ -70,6 +70,8 @@ class SignalInputs:
     target_positions: tuple[TargetPosition, ...]
     reason_codes: tuple[str, ...]
     champion: ChampionRef | None = None
+    sequence: int = 1
+    previous_head_sha256: str | None = None
     previous_signal_sha256: str | None = None
     previous_signal: Mapping[str, Any] | None = None
 
@@ -112,6 +114,8 @@ def _validate_dates(inputs: SignalInputs) -> None:
         raise ValueError("generated_at must be timezone-aware UTC")
     if inputs.latest_complete_date > inputs.as_of:
         raise ValueError("latest_complete_date cannot be later than as_of")
+    if inputs.sequence < 1:
+        raise ValueError("sequence must be positive")
 
 
 def _validate_champion(inputs: SignalInputs, state: RuntimeState) -> None:
@@ -180,11 +184,30 @@ def build_production_signal(
     if inputs.previous_signal is not None and inputs.previous_signal_sha256 is not None:
         _validate_schema(inputs.previous_signal, schema)
         _validate_document_semantics(inputs.previous_signal)
+        previous_sequence = int(inputs.previous_signal["sequence"])
+        if inputs.sequence != previous_sequence + 1:
+            raise ValueError("signal sequence must immediately follow the previous signal")
+        previous_as_of = date.fromisoformat(str(inputs.previous_signal["as_of"]))
+        if previous_as_of > inputs.as_of:
+            raise ValueError("previous signal as_of cannot be later than current as_of")
+        previous_generated_at = datetime.fromisoformat(
+            str(inputs.previous_signal["generated_at"]).replace("Z", "+00:00")
+        )
+        if previous_generated_at >= inputs.generated_at:
+            raise ValueError("previous signal generated_at must be earlier than current")
         previous_positions = _positions_from_document(inputs.previous_signal)
         actual_previous_hash = canonical_signal_sha256(inputs.previous_signal)
         if actual_previous_hash != inputs.previous_signal_sha256:
             raise ValueError("previous signal hash does not match expected hash")
         previous_signal_sha256 = inputs.previous_signal_sha256
+        if inputs.previous_head_sha256 is None:
+            raise ValueError("previous signal requires the current signal-head hash")
+        _require_sha256(
+            inputs.previous_head_sha256,
+            field="previous_head_sha256",
+        )
+    elif inputs.sequence != 1 or inputs.previous_head_sha256 is not None:
+        raise ValueError("initial signal must start at sequence 1 without a previous head")
 
     validate_target_transition(
         state=state,
@@ -194,13 +217,15 @@ def build_production_signal(
 
     signal = {
         "contract_id": "production-signal",
-        "schema_version": "3.0.0",
+        "schema_version": "4.0.0",
         "signal_id": inputs.signal_id,
+        "sequence": inputs.sequence,
         "state": state.value,
         "as_of": inputs.as_of.isoformat(),
         "latest_complete_date": inputs.latest_complete_date.isoformat(),
         "generated_at": inputs.generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "champion": asdict(inputs.champion) if inputs.champion else None,
+        "previous_head_sha256": inputs.previous_head_sha256,
         "previous_signal_sha256": previous_signal_sha256,
         "target_positions": [
             asdict(position)
@@ -223,6 +248,8 @@ def build_initial_flat_signal(
         inputs.health.champion is not ChampionHealth.NEVER_ACTIVATED
         or inputs.health.risk_action is not RiskAction.NONE
         or inputs.champion is not None
+        or inputs.sequence != 1
+        or inputs.previous_head_sha256 is not None
         or inputs.previous_signal_sha256 is not None
         or inputs.previous_signal is not None
         or inputs.target_positions

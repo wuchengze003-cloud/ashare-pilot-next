@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.ashare-pilot.local/production-signal/3.0.0",
+  "$id": "https://contracts.ashare-pilot.local/production-signal/4.0.0",
   "title": "Production Signal",
   "type": "object",
   "additionalProperties": false,
@@ -8,11 +8,13 @@
     "contract_id",
     "schema_version",
     "signal_id",
+    "sequence",
     "state",
     "as_of",
     "latest_complete_date",
     "generated_at",
     "champion",
+    "previous_head_sha256",
     "previous_signal_sha256",
     "target_positions",
     "reason_codes",
@@ -20,8 +22,9 @@
   ],
   "properties": {
     "contract_id": {"const": "production-signal"},
-    "schema_version": {"const": "3.0.0"},
+    "schema_version": {"const": "4.0.0"},
     "signal_id": {"type": "string", "minLength": 3, "maxLength": 160},
+    "sequence": {"type": "integer", "minimum": 1},
     "state": {"enum": ["ACTIVE", "HOLD", "REDUCE_ONLY", "FLAT"]},
     "as_of": {"type": "string", "format": "date"},
     "latest_complete_date": {"type": "string", "format": "date"},
@@ -39,6 +42,12 @@
             "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
           }
         }
+      ]
+    },
+    "previous_head_sha256": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/sha256"}
       ]
     },
     "previous_signal_sha256": {
@@ -109,6 +118,26 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "sequence": {"const": 1}
+        },
+        "required": ["sequence"]
+      },
+      "then": {
+        "properties": {
+          "previous_head_sha256": {"type": "null"},
+          "previous_signal_sha256": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "previous_head_sha256": {"$ref": "#/$defs/sha256"},
+          "previous_signal_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
     {
       "if": {
         "properties": {

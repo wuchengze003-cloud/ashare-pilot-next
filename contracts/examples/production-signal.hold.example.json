@@ -1,7 +1,8 @@
 {
   "contract_id": "production-signal",
-  "schema_version": "3.0.0",
+  "schema_version": "4.0.0",
   "signal_id": "fixture-hold-2026-07-29",
+  "sequence": 2,
   "state": "HOLD",
   "as_of": "2026-07-29",
   "latest_complete_date": "2026-07-28",
@@ -11,6 +12,7 @@
     "strategy_version": "v1",
     "sha256": "9999999999999999999999999999999999999999999999999999999999999999"
   },
+  "previous_head_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
   "previous_signal_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
   "target_positions": [
     {"symbol": "600000.SH", "target_weight": 0.2}
