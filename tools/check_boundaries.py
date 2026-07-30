@@ -56,6 +56,7 @@ CODE_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+TEXT_SUFFIXES = CODE_SUFFIXES | {".md", ".txt"}
 MAX_TRACKED_FILE_BYTES = 1_000_000
 
 INTERNAL_IMPORTS = {
@@ -97,7 +98,12 @@ CURRENT_TIME_CALLS = {
     "pendulum.today",
     "time.time",
 }
-CRITICAL_TIME_AREAS = {"packages/quant_core", "apps/signal_runner"}
+CRITICAL_TIME_AREAS = {
+    "packages/quant_core",
+    "services/data_gateway",
+    "apps/research",
+    "apps/signal_runner",
+}
 
 
 def _walk_files(root: Path) -> list[Path]:
@@ -389,7 +395,7 @@ def check_repository(
             violations.append(f"oversized tracked file: {relative_text}")
 
         content: str | None = None
-        if path.suffix in CODE_SUFFIXES:
+        if path.suffix in TEXT_SUFFIXES:
             content = _read_text(
                 path,
                 relative_text=relative_text,
@@ -398,7 +404,7 @@ def check_repository(
             if content is not None:
                 personal_prefixes = ("/" + "Users/", "/" + "home/", "/" + "root/")
                 if any(prefix in content for prefix in personal_prefixes) or re.search(
-                    r"[A-Za-z]:\\\\Users\\\\",
+                    r"(?i)\b[A-Z]:(?:\\+|/+)Users(?:\\+|/+)",
                     content,
                 ):
                     violations.append(f"personal absolute path: {relative_text}")

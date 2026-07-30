@@ -10,7 +10,6 @@ from .pipeline import (
 from .runner import (
     canonical_json_bytes,
     canonical_json_sha256,
-    canonical_signal_sha256,
 )
 
 __all__ = [
@@ -18,7 +17,6 @@ __all__ = [
     "build_run",
     "canonical_json_bytes",
     "canonical_json_sha256",
-    "canonical_signal_sha256",
     "load_committed_run",
     "load_current_run",
     "publish_run",

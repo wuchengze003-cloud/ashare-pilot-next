@@ -8,9 +8,8 @@ from ashare_signal_runner.runner import (
     ChampionRef,
     ContractSet,
     SignalInputs,
-    build_initial_flat_signal,
     build_production_signal,
-    canonical_signal_sha256,
+    canonical_json_sha256,
 )
 from jsonschema import ValidationError
 
@@ -80,7 +79,7 @@ def active_signal() -> dict[str, object]:
 
 
 def test_runner_publishes_explicit_initial_flat() -> None:
-    signal = build_initial_flat_signal(
+    signal = build_production_signal(
         SignalInputs(
             signal_id="fixture-flat",
             as_of=date(2026, 7, 29),
@@ -114,7 +113,7 @@ def test_runner_publishes_active_signal() -> None:
 
 def test_runner_publishes_hold_with_identical_target_and_previous_hash() -> None:
     previous = active_signal()
-    previous_hash = canonical_signal_sha256(previous)
+    previous_hash = canonical_json_sha256(previous)
     signal = build_production_signal(
         SignalInputs(
             signal_id="fixture-hold",
@@ -154,7 +153,7 @@ def test_runner_rejects_hold_target_change() -> None:
                 champion=champion(),
                 sequence=2,
                 previous_head_sha256="5" * 64,
-                previous_signal_sha256=canonical_signal_sha256(active_signal()),
+                previous_signal_sha256=canonical_json_sha256(active_signal()),
                 previous_signal=active_signal(),
             ),
             schema=SCHEMA,
@@ -176,7 +175,7 @@ def test_runner_publishes_reduce_only() -> None:
             champion=champion(),
             sequence=2,
             previous_head_sha256="5" * 64,
-            previous_signal_sha256=canonical_signal_sha256(previous),
+            previous_signal_sha256=canonical_json_sha256(previous),
             previous_signal=previous,
         ),
         schema=SCHEMA,
@@ -204,7 +203,7 @@ def test_runner_rejects_reduce_only_increase() -> None:
                 champion=champion(),
                 sequence=2,
                 previous_head_sha256="5" * 64,
-                previous_signal_sha256=canonical_signal_sha256(previous),
+                previous_signal_sha256=canonical_json_sha256(previous),
                 previous_signal=previous,
             ),
             schema=SCHEMA,
@@ -226,7 +225,7 @@ def test_risk_flat_keeps_champion_and_correct_reason() -> None:
             champion=champion(),
             sequence=2,
             previous_head_sha256="5" * 64,
-            previous_signal_sha256=canonical_signal_sha256(previous),
+            previous_signal_sha256=canonical_json_sha256(previous),
             previous_signal=previous,
         ),
         schema=SCHEMA,
@@ -235,24 +234,6 @@ def test_risk_flat_keeps_champion_and_correct_reason() -> None:
     assert signal["state"] == "FLAT"
     assert signal["champion"] is not None
     assert signal["reason_codes"] == ["RISK_FLAT"]
-
-
-def test_initial_flat_helper_rejects_risk_flat() -> None:
-    with pytest.raises(ValueError, match="before any champion"):
-        build_initial_flat_signal(
-            SignalInputs(
-                signal_id="fixture-wrong-flat",
-                as_of=date(2026, 7, 30),
-                latest_complete_date=date(2026, 7, 30),
-                generated_at=datetime(2026, 7, 30, 8, tzinfo=UTC),
-                health=health(risk_action=RiskAction.FLAT),
-                contract_set=contract_set(champion=True),
-                target_positions=(),
-                reason_codes=("NO_ACTIVE_CHAMPION",),
-                champion=champion(),
-            ),
-            schema=SCHEMA,
-        )
 
 
 @pytest.mark.parametrize(
@@ -264,7 +245,7 @@ def test_initial_flat_helper_rejects_risk_flat() -> None:
 )
 def test_runner_requires_utc(generated_at: datetime) -> None:
     with pytest.raises(ValueError, match="timezone-aware UTC"):
-        build_initial_flat_signal(
+        build_production_signal(
             SignalInputs(
                 signal_id="fixture-invalid-time",
                 as_of=date(2026, 7, 29),
@@ -281,7 +262,7 @@ def test_runner_requires_utc(generated_at: datetime) -> None:
 
 def test_runner_rejects_future_complete_date() -> None:
     with pytest.raises(ValueError, match="cannot be later"):
-        build_initial_flat_signal(
+        build_production_signal(
             SignalInputs(
                 signal_id="fixture-future-data",
                 as_of=date(2026, 7, 29),
@@ -340,7 +321,7 @@ def test_runner_validates_output_against_schema() -> None:
     invalid_schema["required"] = [*SCHEMA["required"], "missing_by_design"]
 
     with pytest.raises(ValidationError):
-        build_initial_flat_signal(
+        build_production_signal(
             SignalInputs(
                 signal_id="fixture-schema-check",
                 as_of=date(2026, 7, 29),
