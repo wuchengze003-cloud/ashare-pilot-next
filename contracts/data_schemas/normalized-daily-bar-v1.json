@@ -1,0 +1,14 @@
+{
+  "schema_id": "normalized-daily-bar/v1",
+  "primary_key": ["symbol", "trade_date"],
+  "fields": [
+    ["symbol", "string"],
+    ["trade_date", "date"],
+    ["open", "finite-positive-number"],
+    ["high", "finite-positive-number"],
+    ["low", "finite-positive-number"],
+    ["close", "finite-positive-number"],
+    ["volume", "finite-nonnegative-number"],
+    ["amount", "finite-nonnegative-number"]
+  ]
+}

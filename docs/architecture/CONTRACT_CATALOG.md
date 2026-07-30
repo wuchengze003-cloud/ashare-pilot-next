@@ -17,10 +17,26 @@
 | Runtime Manifest | Signal Runner/Ops | Web、审计 | 不发布 |
 | Stage Health | 各阶段 | Ops、Web运维面 | 阻断后续阶段 |
 
-## Production Signal 2.0
+## Dataset Manifest 2.0
 
-- 使用固定`contract_set`绑定数据、Universe、Champion、成本、市场规则、执行规则、
-  组合风险、代码、配置和锁文件哈希。
+- 记录数据族、标准化记录Schema摘要、标准化版本、来源版本和父Manifest。
+- 每个文件记录内容哈希、字节数、行数和交易日期范围。
+- Signal Runner对同一次读取的字节完成哈希、解析、主键和日期校验，再构造不可变
+  `DatasetSnapshot`；策略不能获得数据目录、路径或文件句柄。
+- `DatasetSnapshot`只包含`trade_date <= as_of`的记录，其哈希由数据族、日期、
+  Schema、标准化版本和规范化可见记录生成。
+
+## Universe 2.0
+
+- 每日Universe是点时成员快照，同时声明稳定的生成规则ID和版本。
+- `UniverseSnapshot`哈希由规则身份、日期和规范化成员生成。
+- 当日成员内容可以变化；生成规则ID或版本变化属于合同漂移。
+
+## Production Signal 3.0
+
+- 使用`contract_set`分别绑定当日Dataset Manifest、点时Dataset Snapshot、
+  点时Universe Snapshot、Champion、成本、市场规则、执行规则、组合风险、
+  代码、配置和锁文件哈希。
 - `HOLD`与`REDUCE_ONLY`必须引用并加载上一份完整信号。
 - `HOLD`目标必须与上一有效目标相同。
 - `REDUCE_ONLY`不得新增证券，也不得提高任何证券目标权重。
@@ -36,15 +52,19 @@
 - 当前首个受支持日期为`2022-04-29`，首版市场为沪深A股；更早日期和北交所
   在补齐经审核费率前不得回测。
 
-## Champion 2.0
+## Champion 3.0
 
-- Champion必须记录晋级时的数据Manifest、Universe、成本、市场规则、执行规则、
-  组合风险、策略代码、配置和锁文件哈希。
+- `promotion_evidence`保存晋级时的数据Manifest、Dataset Snapshot和Universe
+  Snapshot哈希，仅作为不可变审计证据。
+- `promotion_compatibility`绑定未来运行必须保持的数据族、记录Schema、标准化版本、
+  Universe规则ID和规则版本。
+- `fixed_contract_set`绑定成本、市场规则、执行规则、组合风险、策略代码、配置和
+  锁文件哈希，这些固定合同必须与晋级环境精确一致。
 - Champion必须记录适配器ID和适配器产物哈希。
-- Signal Runner生成`ACTIVE`信号前，必须逐项比较当前合同和锁文件；任一项不一致
-  都不得激活。
+- 正常新增行情或成员调整不会因为每日内容哈希变化而使Champion失效；Schema、
+  标准化逻辑、Universe生成规则或固定合同变化时不得激活。
 - 当前仅校验运行时策略对象声明的适配器身份。按Champion从受信任不可变产物加载
-  适配器、计算本地代码和锁文件真实摘要，仍属于后续独立里程碑。
+  适配器、计算本地代码和锁文件真实摘要，仍属于后续独立Gate。
 
 ## 版本规则
 

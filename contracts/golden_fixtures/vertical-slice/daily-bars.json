@@ -2,21 +2,41 @@
   {
     "symbol": "000001.SZ",
     "trade_date": "2026-07-28",
-    "close": 10.0
+    "open": 9.9,
+    "high": 10.1,
+    "low": 9.8,
+    "close": 10.0,
+    "volume": 100000.0,
+    "amount": 1000000.0
   },
   {
     "symbol": "000001.SZ",
     "trade_date": "2026-07-29",
-    "close": 10.5
+    "open": 10.1,
+    "high": 10.6,
+    "low": 10.0,
+    "close": 10.5,
+    "volume": 120000.0,
+    "amount": 1250000.0
   },
   {
     "symbol": "600000.SH",
     "trade_date": "2026-07-28",
-    "close": 12.0
+    "open": 11.9,
+    "high": 12.1,
+    "low": 11.8,
+    "close": 12.0,
+    "volume": 90000.0,
+    "amount": 1080000.0
   },
   {
     "symbol": "600000.SH",
     "trade_date": "2026-07-29",
-    "close": 13.2
+    "open": 12.2,
+    "high": 13.3,
+    "low": 12.1,
+    "close": 13.2,
+    "volume": 150000.0,
+    "amount": 1950000.0
   }
 ]

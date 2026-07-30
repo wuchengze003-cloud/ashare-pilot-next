@@ -41,8 +41,9 @@ class ChampionRef:
 
 @dataclass(frozen=True)
 class ContractSet:
-    dataset_sha256: str
-    universe_sha256: str
+    dataset_manifest_sha256: str
+    dataset_snapshot_sha256: str
+    universe_snapshot_sha256: str
     champion_sha256: str | None
     cost_model_sha256: str
     market_rules_sha256: str
@@ -193,7 +194,7 @@ def build_production_signal(
 
     signal = {
         "contract_id": "production-signal",
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "signal_id": inputs.signal_id,
         "state": state.value,
         "as_of": inputs.as_of.isoformat(),

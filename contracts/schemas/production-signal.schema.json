@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.ashare-pilot.local/production-signal/2.0.0",
+  "$id": "https://contracts.ashare-pilot.local/production-signal/3.0.0",
   "title": "Production Signal",
   "type": "object",
   "additionalProperties": false,
@@ -20,7 +20,7 @@
   ],
   "properties": {
     "contract_id": {"const": "production-signal"},
-    "schema_version": {"const": "2.0.0"},
+    "schema_version": {"const": "3.0.0"},
     "signal_id": {"type": "string", "minLength": 3, "maxLength": 160},
     "state": {"enum": ["ACTIVE", "HOLD", "REDUCE_ONLY", "FLAT"]},
     "as_of": {"type": "string", "format": "date"},
@@ -70,8 +70,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "dataset_sha256",
-        "universe_sha256",
+        "dataset_manifest_sha256",
+        "dataset_snapshot_sha256",
+        "universe_snapshot_sha256",
         "champion_sha256",
         "cost_model_sha256",
         "market_rules_sha256",
@@ -82,8 +83,9 @@
         "lockfile_sha256"
       ],
       "properties": {
-        "dataset_sha256": {"$ref": "#/$defs/sha256"},
-        "universe_sha256": {"$ref": "#/$defs/sha256"},
+        "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "dataset_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "universe_snapshot_sha256": {"$ref": "#/$defs/sha256"},
         "champion_sha256": {
           "oneOf": [
             {"type": "null"},

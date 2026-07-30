@@ -18,8 +18,9 @@ def cost_model() -> dict[str, object]:
 
 def contract_set(*, champion_sha256: str | None = None) -> dict[str, str | None]:
     return {
-        "dataset_sha256": "a" * 64,
-        "universe_sha256": "b" * 64,
+        "dataset_manifest_sha256": "a" * 64,
+        "dataset_snapshot_sha256": "b" * 64,
+        "universe_snapshot_sha256": "8" * 64,
         "champion_sha256": champion_sha256,
         "cost_model_sha256": "c" * 64,
         "market_rules_sha256": "d" * 64,

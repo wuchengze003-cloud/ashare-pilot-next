@@ -1,15 +1,24 @@
 {
   "contract_id": "champion",
-  "schema_version": "2.0.0",
+  "schema_version": "3.0.0",
   "strategy_id": "fixture-reference",
   "strategy_version": "v1",
   "adapter_id": "fixture-reference-adapter/v1",
   "adapter_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "promoted_at": "2026-07-29T07:59:00Z",
-  "dataset_id": "fixture-daily-2026-07-29-b9591a573343",
-  "promotion_contract_set": {
-    "dataset_manifest_sha256": "28d8439ab1984a8d316e75fdba294239d11e0bfa4c7857e996df02b803e104eb",
-    "universe_sha256": "0ee2dd296a225a054ee2382ae44d816fc82ed9a1bfd4a374c8108687545d30cf",
+  "promotion_compatibility": {
+    "dataset_family_id": "fixture-daily/v1",
+    "data_schema_sha256": "f7c3a922e4ee8834bcea26870e689f99f90d2093c215ccd0baf72387567a5caf",
+    "normalization_version": "fixture-normalizer/v1",
+    "universe_policy_id": "fixture-csi800",
+    "universe_policy_version": "v1"
+  },
+  "promotion_evidence": {
+    "dataset_manifest_sha256": "45089ef552f26b21a2acc764feb9e5052331ac209bee61bb342b0b8fc03756b2",
+    "dataset_snapshot_sha256": "c9165f08627da8fbe3735ada17d78d91a1b254adf52fde4a18fda30821330868",
+    "universe_snapshot_sha256": "854733ffaa2378d46e404acc65d851f588262b2be3aae4bcdc55e18cb14b680a"
+  },
+  "fixed_contract_set": {
     "cost_model_sha256": "06fe9101e0e300f3da939d1180e975b6afa7da4a7803e4e124d7ad645dd8240e",
     "market_rules_sha256": "28672e83f2aded869b4b3d196602458eab364b8d6e656b602d00752f591388fa",
     "execution_policy_sha256": "e4fa6bc36b3eeb665421f1fbad061e48fb5d03bee020280aa9d59b27e38b0a32",

@@ -23,8 +23,9 @@ CHAMPION_HASH = "9" * 64
 
 def contract_set(*, champion: bool) -> ContractSet:
     return ContractSet(
-        dataset_sha256="a" * 64,
-        universe_sha256="b" * 64,
+        dataset_manifest_sha256="a" * 64,
+        dataset_snapshot_sha256="b" * 64,
+        universe_snapshot_sha256="8" * 64,
         champion_sha256=CHAMPION_HASH if champion else None,
         cost_model_sha256="c" * 64,
         market_rules_sha256="d" * 64,
@@ -288,8 +289,9 @@ def test_runner_rejects_future_complete_date() -> None:
 def test_contract_set_rejects_invalid_hash() -> None:
     with pytest.raises(ValueError, match="lowercase SHA-256"):
         ContractSet(
-            dataset_sha256="not-a-hash",
-            universe_sha256="b" * 64,
+            dataset_manifest_sha256="not-a-hash",
+            dataset_snapshot_sha256="b" * 64,
+            universe_snapshot_sha256="8" * 64,
             champion_sha256=None,
             cost_model_sha256="c" * 64,
             market_rules_sha256="d" * 64,
