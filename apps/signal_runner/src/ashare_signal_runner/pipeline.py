@@ -17,7 +17,10 @@ from ashare_quant_core import (
     ChampionHealth,
     HealthSnapshot,
     RiskAction,
+    RuntimeState,
     Strategy,
+    TargetPosition,
+    resolve_state,
     select_cost_segment,
     validate_portfolio_targets,
 )
@@ -32,8 +35,7 @@ from .runner import (
     canonical_json_sha256,
 )
 
-REQUIRED_INPUT_CONTRACTS = {
-    "champion",
+BASE_INPUT_CONTRACTS = {
     "cost-model",
     "dataset-manifest",
     "execution-policy",
@@ -41,8 +43,10 @@ REQUIRED_INPUT_CONTRACTS = {
     "portfolio-risk",
     "universe",
 }
+OPTIONAL_INPUT_CONTRACTS = {"champion"}
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 GIT_SHA_PATTERN = re.compile(r"^[a-f0-9]{40}$")
+NO_STRATEGY_SHA256 = hashlib.sha256(b"ashare-pilot/no-strategy/v1").hexdigest()
 PROMOTION_CONTRACT_FIELDS = {
     "cost-model": "cost_model_sha256",
     "dataset-manifest": "dataset_manifest_sha256",
@@ -140,30 +144,98 @@ def _validate_request_hashes(*, git_sha: str, lockfile_sha256: str) -> None:
         raise ValueError("lockfile_sha256 must be a lowercase SHA-256")
 
 
-def _verify_champion_bindings(
+def _champion_binding_issues(
     *,
     champion: Mapping[str, Any],
     contract_hashes: Mapping[str, str],
     lockfile_sha256: str,
-    strategy: Strategy,
-) -> None:
+    strategy: Strategy | None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    contract_issues: list[str] = []
+    hash_issues: list[str] = []
     promotion_contract_set = champion["promotion_contract_set"]
     for contract_id, champion_field in PROMOTION_CONTRACT_FIELDS.items():
         if promotion_contract_set[champion_field] != contract_hashes[contract_id]:
-            raise ValueError(
-                f"champion {champion_field} does not match current {contract_id}"
+            contract_issues.append(
+                f"CHAMPION_{contract_id.replace('-', '_').upper()}_MISMATCH"
             )
     if promotion_contract_set["lockfile_sha256"] != lockfile_sha256:
-        raise ValueError("champion lockfile_sha256 does not match current lockfile")
-    if champion["adapter_id"] != getattr(strategy, "adapter_id", None):
-        raise ValueError("champion adapter_id does not match strategy adapter")
-    if champion["adapter_sha256"] != getattr(strategy, "adapter_sha256", None):
-        raise ValueError("champion adapter_sha256 does not match strategy adapter")
+        hash_issues.append("CHAMPION_LOCKFILE_MISMATCH")
+    if strategy is None:
+        contract_issues.append("STRATEGY_ADAPTER_MISSING")
+    else:
+        if champion["strategy_id"] != strategy.strategy_id:
+            contract_issues.append("CHAMPION_STRATEGY_ID_MISMATCH")
+        if champion["strategy_version"] != strategy.strategy_version:
+            contract_issues.append("CHAMPION_STRATEGY_VERSION_MISMATCH")
+        if champion["adapter_id"] != getattr(strategy, "adapter_id", None):
+            contract_issues.append("CHAMPION_ADAPTER_ID_MISMATCH")
+        if champion["adapter_sha256"] != getattr(strategy, "adapter_sha256", None):
+            hash_issues.append("CHAMPION_ADAPTER_HASH_MISMATCH")
+    return tuple(contract_issues), tuple(hash_issues)
 
 
-def build_active_run(
+def _previous_signal_context(
     *,
-    strategy: Strategy,
+    previous_signal: Mapping[str, Any] | None,
+    previous_signal_sha256: str | None,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> tuple[
+    tuple[TargetPosition, ...] | None,
+    ChampionRef | None,
+    ContractSet | None,
+]:
+    if (previous_signal is None) != (previous_signal_sha256 is None):
+        raise ValueError("previous signal document and expected hash must be provided together")
+    if previous_signal is None or previous_signal_sha256 is None:
+        return None, None, None
+    _validate_contract(
+        contract_id="production-signal",
+        document=previous_signal,
+        schemas=schemas,
+    )
+    if canonical_json_sha256(previous_signal) != previous_signal_sha256:
+        raise ValueError("previous signal hash does not match expected hash")
+    positions = tuple(
+        TargetPosition(
+            symbol=str(item["symbol"]),
+            target_weight=float(item["target_weight"]),
+        )
+        for item in previous_signal["target_positions"]
+    )
+    raw_champion = previous_signal["champion"]
+    champion = (
+        ChampionRef(
+            strategy_id=str(raw_champion["strategy_id"]),
+            strategy_version=str(raw_champion["strategy_version"]),
+            sha256=str(raw_champion["sha256"]),
+        )
+        if raw_champion is not None
+        else None
+    )
+    raw_contract_set = previous_signal["contract_set"]
+    contract_set = ContractSet(
+        dataset_sha256=str(raw_contract_set["dataset_sha256"]),
+        universe_sha256=str(raw_contract_set["universe_sha256"]),
+        champion_sha256=raw_contract_set["champion_sha256"],
+        cost_model_sha256=str(raw_contract_set["cost_model_sha256"]),
+        market_rules_sha256=str(raw_contract_set["market_rules_sha256"]),
+        execution_policy_sha256=str(raw_contract_set["execution_policy_sha256"]),
+        portfolio_risk_sha256=str(raw_contract_set["portfolio_risk_sha256"]),
+        code_sha256=str(raw_contract_set["code_sha256"]),
+        config_sha256=str(raw_contract_set["config_sha256"]),
+        lockfile_sha256=str(raw_contract_set["lockfile_sha256"]),
+    )
+    return positions, champion, contract_set
+
+
+def _deduplicate(items: list[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(items))
+
+
+def build_run(
+    *,
+    strategy: Strategy | None,
     as_of: date,
     generated_at: datetime,
     signal_id: str,
@@ -173,61 +245,135 @@ def build_active_run(
     dataset_root: Path,
     documents: Mapping[str, Mapping[str, Any]],
     schemas: Mapping[str, Mapping[str, Any]],
+    previous_signal: Mapping[str, Any] | None = None,
+    previous_signal_sha256: str | None = None,
+    risk_action: RiskAction = RiskAction.NONE,
 ) -> RunArtifacts:
-    """Build one ACTIVE signal and runtime manifest from verified contracts."""
+    """Build one production state from verified inputs and internal health checks."""
     _validate_request_hashes(git_sha=git_sha, lockfile_sha256=lockfile_sha256)
     if generated_at.tzinfo is None or generated_at.utcoffset() != timedelta(0):
         raise ValueError("generated_at must be timezone-aware UTC")
-    missing_documents = sorted(REQUIRED_INPUT_CONTRACTS - documents.keys())
+    unknown_documents = sorted(
+        documents.keys() - BASE_INPUT_CONTRACTS - OPTIONAL_INPUT_CONTRACTS
+    )
+    if unknown_documents:
+        raise ValueError(f"unknown input contracts: {unknown_documents}")
+    missing_documents = sorted(BASE_INPUT_CONTRACTS - documents.keys())
     if missing_documents:
         raise ValueError(f"missing input contracts: {missing_documents}")
 
-    for contract_id in sorted(REQUIRED_INPUT_CONTRACTS):
+    for contract_id in sorted(BASE_INPUT_CONTRACTS):
         _validate_contract(
             contract_id=contract_id,
             document=documents[contract_id],
             schemas=schemas,
         )
+    champion = documents.get("champion")
+    if champion is not None:
+        _validate_contract(
+            contract_id="champion",
+            document=champion,
+            schemas=schemas,
+        )
 
     dataset_manifest = documents["dataset-manifest"]
     universe = documents["universe"]
-    champion = documents["champion"]
     portfolio_risk = documents["portfolio-risk"]
     contract_hashes = {
         contract_id: canonical_json_sha256(document)
         for contract_id, document in documents.items()
-        if contract_id in REQUIRED_INPUT_CONTRACTS
+        if contract_id in BASE_INPUT_CONTRACTS | OPTIONAL_INPUT_CONTRACTS
     }
-    if dataset_manifest["dataset_kind"] != "normalized":
-        raise ValueError("production inference requires a normalized dataset")
-    if dataset_manifest["quality_status"] != "pass":
-        raise ValueError("dataset quality must pass")
-    if universe["quality_status"] != "pass":
-        raise ValueError("universe quality must pass")
-    if date.fromisoformat(str(dataset_manifest["as_of"])) != as_of:
-        raise ValueError("dataset manifest as_of must match the run as_of")
-    if date.fromisoformat(str(universe["as_of"])) != as_of:
-        raise ValueError("universe as_of must match the run as_of")
-    if champion["dataset_id"] != dataset_manifest["dataset_id"]:
-        raise ValueError("champion dataset_id does not match dataset manifest")
-    if champion["strategy_id"] != strategy.strategy_id:
-        raise ValueError("champion strategy_id does not match strategy adapter")
-    if champion["strategy_version"] != strategy.strategy_version:
-        raise ValueError("champion strategy_version does not match strategy adapter")
-    _verify_champion_bindings(
-        champion=champion,
-        contract_hashes=contract_hashes,
-        lockfile_sha256=lockfile_sha256,
-        strategy=strategy,
+    previous_positions, previous_champion, previous_contract_set = (
+        _previous_signal_context(
+            previous_signal=previous_signal,
+            previous_signal_sha256=previous_signal_sha256,
+            schemas=schemas,
+        )
     )
-    promoted_at = datetime.fromisoformat(str(champion["promoted_at"]).replace("Z", "+00:00"))
-    if promoted_at > generated_at:
-        raise ValueError("champion cannot be promoted after signal generation")
 
-    _verify_dataset_files(dataset_manifest, dataset_root=dataset_root)
+    reason_codes: list[str] = []
+    decision_data_valid = True
+    contracts_valid = True
+    hashes_valid = True
+    dataset_as_of = date.fromisoformat(str(dataset_manifest["as_of"]))
+    universe_as_of = date.fromisoformat(str(universe["as_of"]))
+    if dataset_as_of > as_of:
+        raise ValueError("dataset manifest cannot be later than the run as_of")
+    if universe_as_of > as_of:
+        raise ValueError("universe cannot be later than the run as_of")
+    if dataset_manifest["dataset_kind"] != "normalized":
+        decision_data_valid = False
+        reason_codes.append("DATASET_NOT_NORMALIZED")
+    if dataset_manifest["quality_status"] != "pass":
+        decision_data_valid = False
+        reason_codes.append("DATASET_QUALITY_FAILED")
+    if universe["quality_status"] != "pass":
+        decision_data_valid = False
+        reason_codes.append("UNIVERSE_QUALITY_FAILED")
+    if dataset_as_of != as_of:
+        decision_data_valid = False
+        reason_codes.append("DATASET_STALE")
+    if universe_as_of != as_of:
+        decision_data_valid = False
+        reason_codes.append("UNIVERSE_STALE")
+    dataset_file_error: OSError | ValueError | json.JSONDecodeError | None = None
+    try:
+        _verify_dataset_files(dataset_manifest, dataset_root=dataset_root)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        dataset_file_error = exc
+        hashes_valid = False
+        reason_codes.append("DATASET_FILES_INVALID")
 
-    champion_hash = contract_hashes["champion"]
-    promotion_contract_set = champion["promotion_contract_set"]
+    current_champion: ChampionRef | None = None
+    champion_health = ChampionHealth.NEVER_ACTIVATED
+    code_sha256 = NO_STRATEGY_SHA256
+    config_sha256 = NO_STRATEGY_SHA256
+    champion_hash: str | None = None
+    if champion is None:
+        if previous_signal is not None:
+            champion_health = ChampionHealth.HEALTHY
+            current_champion = previous_champion
+            contracts_valid = False
+            reason_codes.append("CHAMPION_MISSING")
+            if previous_contract_set is None:
+                raise ValueError("previous signal contract set is missing")
+            code_sha256 = previous_contract_set.code_sha256
+            config_sha256 = previous_contract_set.config_sha256
+            champion_hash = previous_contract_set.champion_sha256
+        else:
+            reason_codes.append("CHAMPION_NEVER_ACTIVATED")
+    else:
+        champion_health = ChampionHealth.HEALTHY
+        champion_hash = contract_hashes["champion"]
+        current_champion = ChampionRef(
+            strategy_id=str(champion["strategy_id"]),
+            strategy_version=str(champion["strategy_version"]),
+            sha256=champion_hash,
+        )
+        promotion_contract_set = champion["promotion_contract_set"]
+        code_sha256 = str(promotion_contract_set["code_sha256"])
+        config_sha256 = str(promotion_contract_set["config_sha256"])
+        promoted_at = datetime.fromisoformat(
+            str(champion["promoted_at"]).replace("Z", "+00:00")
+        )
+        if promoted_at > generated_at:
+            raise ValueError("champion cannot be promoted after signal generation")
+        contract_issues, hash_issues = _champion_binding_issues(
+            champion=champion,
+            contract_hashes=contract_hashes,
+            lockfile_sha256=lockfile_sha256,
+            strategy=strategy,
+        )
+        if champion["dataset_id"] != dataset_manifest["dataset_id"]:
+            contract_issues = (*contract_issues, "CHAMPION_DATASET_ID_MISMATCH")
+        if contract_issues:
+            contracts_valid = False
+            reason_codes.extend(contract_issues)
+        if hash_issues:
+            hashes_valid = False
+            reason_codes.extend(hash_issues)
+
     contract_set = ContractSet(
         dataset_sha256=contract_hashes["dataset-manifest"],
         universe_sha256=contract_hashes["universe"],
@@ -236,55 +382,79 @@ def build_active_run(
         market_rules_sha256=contract_hashes["market-rules"],
         execution_policy_sha256=contract_hashes["execution-policy"],
         portfolio_risk_sha256=contract_hashes["portfolio-risk"],
-        code_sha256=str(promotion_contract_set["code_sha256"]),
-        config_sha256=str(promotion_contract_set["config_sha256"]),
+        code_sha256=code_sha256,
+        config_sha256=config_sha256,
         lockfile_sha256=lockfile_sha256,
     )
 
-    targets = tuple(
-        strategy.target_positions(
-            as_of=as_of,
-            dataset_id=str(dataset_manifest["dataset_id"]),
-            universe_id=str(universe["universe_id"]),
-        )
+    health = HealthSnapshot(
+        execution_data_valid=True,
+        previous_target_known=True,
+        decision_data_valid=decision_data_valid,
+        contracts_valid=contracts_valid,
+        hashes_valid=hashes_valid,
+        champion=champion_health,
+        risk_action=risk_action,
     )
-    validate_portfolio_targets(
-        targets,
-        eligible_symbols=_eligible_symbols(universe, as_of=as_of),
-        max_positions=int(portfolio_risk["max_positions"]),
-        max_single_weight=float(portfolio_risk["max_single_weight"]),
-        max_gross_exposure=float(portfolio_risk["max_gross_exposure"]),
-    )
-    for target in targets:
-        market = target.symbol.rsplit(".", 1)[-1]
-        select_cost_segment(
-            trade_date=as_of,
-            market=market,
-            model=documents["cost-model"],
+    state = resolve_state(health)
+    if state in {RuntimeState.HOLD, RuntimeState.REDUCE_ONLY} and previous_positions is None:
+        if dataset_file_error is not None:
+            raise ValueError(
+                "cannot publish a degraded state without a previous signal: "
+                f"{dataset_file_error}"
+            ) from dataset_file_error
+        raise ValueError(f"{state.value} requires a verified previous signal")
+
+    targets: tuple[TargetPosition, ...]
+    if state is RuntimeState.FLAT:
+        targets = ()
+        if risk_action is RiskAction.FLAT:
+            reason_codes.append("RISK_FLAT")
+    elif state is RuntimeState.HOLD:
+        assert previous_positions is not None
+        targets = previous_positions
+    else:
+        if strategy is None:
+            raise ValueError(f"{state.value} requires a strategy adapter")
+        targets = tuple(
+            strategy.target_positions(
+                as_of=as_of,
+                dataset_id=str(dataset_manifest["dataset_id"]),
+                universe_id=str(universe["universe_id"]),
+            )
         )
+        validate_portfolio_targets(
+            targets,
+            eligible_symbols=_eligible_symbols(universe, as_of=as_of),
+            max_positions=int(portfolio_risk["max_positions"]),
+            max_single_weight=float(portfolio_risk["max_single_weight"]),
+            max_gross_exposure=float(portfolio_risk["max_gross_exposure"]),
+        )
+        for target in targets:
+            market = target.symbol.rsplit(".", 1)[-1]
+            select_cost_segment(
+                trade_date=as_of,
+                market=market,
+                model=documents["cost-model"],
+            )
+        if state is RuntimeState.ACTIVE:
+            reason_codes.append("CHAMPION_ACTIVE")
+        else:
+            reason_codes.append("RISK_REDUCE")
+
     production_signal = build_production_signal(
         SignalInputs(
             signal_id=signal_id,
             as_of=as_of,
-            latest_complete_date=as_of,
+            latest_complete_date=dataset_as_of,
             generated_at=generated_at,
-            health=HealthSnapshot(
-                execution_data_valid=True,
-                previous_target_known=True,
-                decision_data_valid=True,
-                contracts_valid=True,
-                hashes_valid=True,
-                champion=ChampionHealth.HEALTHY,
-                risk_action=RiskAction.NONE,
-            ),
+            health=health,
             contract_set=contract_set,
             target_positions=targets,
-            reason_codes=("CHAMPION_ACTIVE",),
-            champion=ChampionRef(
-                strategy_id=str(champion["strategy_id"]),
-                strategy_version=str(champion["strategy_version"]),
-                sha256=champion_hash,
-            ),
+            reason_codes=_deduplicate(reason_codes),
+            champion=current_champion,
+            previous_signal=previous_signal,
+            previous_signal_sha256=previous_signal_sha256,
         ),
         schema=schemas["production-signal"],
     )
@@ -300,7 +470,12 @@ def build_active_run(
             {"artifact_id": contract_id, "sha256": contract_hashes[contract_id]}
             for contract_id in sorted(contract_hashes)
         ]
-        + [{"artifact_id": "lockfile", "sha256": lockfile_sha256}],
+        + [{"artifact_id": "lockfile", "sha256": lockfile_sha256}]
+        + (
+            [{"artifact_id": "previous-production-signal", "sha256": previous_signal_sha256}]
+            if previous_signal_sha256 is not None
+            else []
+        ),
         "outputs": [
             {"artifact_id": "production-signal", "sha256": signal_hash},
         ],
