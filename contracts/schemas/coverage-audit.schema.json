@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/coverage-audit/1.0.0",
+  "title": "Historical Universe Coverage Audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "audit_id",
+    "universe_policy_id",
+    "universe_policy_version",
+    "window_start",
+    "window_end",
+    "generated_at",
+    "expected_member_count",
+    "open_trade_days",
+    "expected_member_days",
+    "bar_member_days",
+    "suspended_member_days",
+    "missing_member_days",
+    "silent_skip_symbols",
+    "delisted_symbols_in_scope",
+    "member_count_anomalies",
+    "passed",
+    "reason_codes"
+  ],
+  "properties": {
+    "contract_id": {"const": "coverage-audit"},
+    "schema_version": {"const": "1.0.0"},
+    "audit_id": {"type": "string", "minLength": 3, "maxLength": 160},
+    "universe_policy_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "universe_policy_version": {"type": "string", "pattern": "^v[0-9]+$"},
+    "window_start": {"type": "string", "format": "date"},
+    "window_end": {"type": "string", "format": "date"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "expected_member_count": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "integer", "minimum": 1}
+      ]
+    },
+    "open_trade_days": {"type": "integer", "minimum": 1},
+    "expected_member_days": {"type": "integer", "minimum": 0},
+    "bar_member_days": {"type": "integer", "minimum": 0},
+    "suspended_member_days": {"type": "integer", "minimum": 0},
+    "missing_member_days": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/member_day"}
+    },
+    "silent_skip_symbols": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/symbol"}
+    },
+    "delisted_symbols_in_scope": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/symbol"}
+    },
+    "member_count_anomalies": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trade_date", "actual_count", "expected_count"],
+        "properties": {
+          "trade_date": {"type": "string", "format": "date"},
+          "actual_count": {"type": "integer", "minimum": 0},
+          "expected_count": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "passed": {"type": "boolean"},
+    "reason_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"}
+    }
+  },
+  "$defs": {
+    "symbol": {
+      "type": "string",
+      "pattern": "^[0-9]{6}\\.(SZ|SH|BJ)$"
+    },
+    "member_day": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "trade_date"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/symbol"},
+        "trade_date": {"type": "string", "format": "date"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"passed": {"const": true}},
+        "required": ["passed"]
+      },
+      "then": {
+        "properties": {
+          "missing_member_days": {"maxItems": 0},
+          "silent_skip_symbols": {"maxItems": 0},
+          "member_count_anomalies": {"maxItems": 0},
+          "reason_codes": {"maxItems": 0}
+        }
+      },
+      "else": {
+        "properties": {
+          "reason_codes": {"minItems": 1}
+        }
+      }
+    }
+  ]
+}

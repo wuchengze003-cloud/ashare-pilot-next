@@ -2,6 +2,11 @@
   "registry_version": "1.0.0",
   "contracts": [
     {
+      "contract_id": "coverage-audit",
+      "schema": "schemas/coverage-audit.schema.json",
+      "examples": ["examples/coverage-audit.example.json"]
+    },
+    {
       "contract_id": "dataset-manifest",
       "schema": "schemas/dataset-manifest.schema.json",
       "examples": ["examples/dataset-manifest.example.json"]

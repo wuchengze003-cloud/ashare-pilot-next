@@ -1,0 +1,21 @@
+{
+  "contract_id": "coverage-audit",
+  "schema_version": "1.0.0",
+  "audit_id": "fixture-coverage-20260720",
+  "universe_policy_id": "fixture-index",
+  "universe_policy_version": "v1",
+  "window_start": "2026-07-20",
+  "window_end": "2026-07-24",
+  "generated_at": "2026-07-25T08:00:00Z",
+  "expected_member_count": 2,
+  "open_trade_days": 5,
+  "expected_member_days": 10,
+  "bar_member_days": 10,
+  "suspended_member_days": 0,
+  "missing_member_days": [],
+  "silent_skip_symbols": [],
+  "delisted_symbols_in_scope": [],
+  "member_count_anomalies": [],
+  "passed": true,
+  "reason_codes": []
+}

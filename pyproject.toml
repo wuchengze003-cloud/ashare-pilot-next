@@ -28,6 +28,8 @@ addopts = "-q"
 pythonpath = ["."]
 testpaths = [
   "packages/quant_core/tests",
+  "services/data_gateway/tests",
+  "apps/research/tests",
   "apps/signal_runner/tests",
   "tools/tests"
 ]
