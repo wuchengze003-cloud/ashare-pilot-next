@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/strategy-adapter/1.0.0",
+  "title": "Immutable Strategy Adapter",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "adapter_id",
+    "strategy_id",
+    "strategy_version",
+    "entrypoint",
+    "code_file",
+    "code_sha256",
+    "config_file",
+    "config_sha256",
+    "package_sha256"
+  ],
+  "properties": {
+    "contract_id": {"const": "strategy-adapter"},
+    "schema_version": {"const": "1.0.0"},
+    "adapter_id": {"type": "string", "pattern": "^[a-z0-9-]+/v[0-9]+$"},
+    "strategy_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "strategy_version": {"type": "string", "pattern": "^v[0-9]+(?:\\.[0-9]+){0,2}$"},
+    "entrypoint": {"const": "adapter.py:build_strategy"},
+    "code_file": {"const": "adapter.py"},
+    "code_sha256": {"$ref": "#/$defs/sha256"},
+    "config_file": {"const": "config.json"},
+    "config_sha256": {"$ref": "#/$defs/sha256"},
+    "package_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

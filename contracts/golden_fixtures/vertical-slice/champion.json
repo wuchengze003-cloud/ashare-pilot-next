@@ -4,7 +4,7 @@
   "strategy_id": "fixture-reference",
   "strategy_version": "v1",
   "adapter_id": "fixture-reference-adapter/v1",
-  "adapter_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "adapter_sha256": "a692698ca214c8354c927ad11998958f834edfdbafe3ac0b507f8587651aa86a",
   "promoted_at": "2026-07-29T07:59:00Z",
   "promotion_compatibility": {
     "dataset_family_id": "fixture-daily/v1",
@@ -23,9 +23,9 @@
     "market_rules_sha256": "28672e83f2aded869b4b3d196602458eab364b8d6e656b602d00752f591388fa",
     "execution_policy_sha256": "e4fa6bc36b3eeb665421f1fbad061e48fb5d03bee020280aa9d59b27e38b0a32",
     "portfolio_risk_sha256": "26b08e059e67a60202783186d107c8e72339028c744c8697c2d1efbc5925451e",
-    "code_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "config_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "lockfile_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    "code_sha256": "cdf65f936f12efeea555f9a5f84fde5bb7c7770b9d500a1571de8e38ebaab47c",
+    "config_sha256": "43ffada4771a7a1c99f819f6b62c6d22d6f72824a666b64a373cb312388a7597",
+    "lockfile_sha256": "628a314f537c67dc2f7fe4ce672d576db211c8886a31af0f662f95a532a89f27"
   },
   "promotion_report_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 }

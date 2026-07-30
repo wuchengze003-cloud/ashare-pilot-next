@@ -21,8 +21,6 @@ class TargetPosition:
 class Strategy(Protocol):
     strategy_id: str
     strategy_version: str
-    adapter_id: str
-    adapter_sha256: str
 
     def target_positions(
         self,
