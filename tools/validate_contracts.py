@@ -169,6 +169,55 @@ def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -
     ) > parse_datetime(document["finished_at"]):
         raise ValueError(f"{path}: stage finishes before it starts")
 
+    if contract_id == "web-state":
+        generated_at = parse_datetime(document["generated_at"])
+        if generated_at.tzinfo is None or generated_at.utcoffset() is None:
+            raise ValueError(f"{path}: generated_at must include a timezone")
+        if generated_at.utcoffset().total_seconds() != 0:
+            raise ValueError(f"{path}: generated_at must use UTC")
+        as_of = parse_date(document["as_of"])
+        latest_trade_date = document["data_source"]["latest_trade_date"]
+        if latest_trade_date is not None and parse_date(latest_trade_date) > as_of:
+            raise ValueError(f"{path}: latest_trade_date cannot be later than as_of")
+        window = document["model"]["backtest_window"]
+        if parse_date(window["start"]) > parse_date(window["end"]):
+            raise ValueError(f"{path}: backtest window starts after it ends")
+        if parse_date(document["model"]["training_cutoff"]) > parse_date(
+            document["model"]["validation_cutoff"]
+        ):
+            raise ValueError(f"{path}: training cutoff cannot follow validation cutoff")
+        ranks = [item["rank"] for item in document["rankings"]]
+        if sorted(ranks) != list(range(1, len(ranks) + 1)):
+            raise ValueError(f"{path}: ranking ranks must be a 1..N sequence")
+        symbols = [item["symbol"] for item in document["rankings"]]
+        if len(symbols) != len(set(symbols)):
+            raise ValueError(f"{path}: duplicate ranking symbol")
+        portfolio = document["portfolio"]
+        position_value = sum(item["market_value"] for item in portfolio["positions"])
+        if abs(position_value - portfolio["market_value"]) > 0.01:
+            raise ValueError(f"{path}: position values do not reconcile to market_value")
+        accounted = portfolio["cash"] + portfolio["market_value"]
+        if abs(accounted - portfolio["total_assets"]) > 0.01:
+            raise ValueError(f"{path}: cash plus market_value must equal total_assets")
+        for item in portfolio["positions"]:
+            if item["locked_shares"] > item["shares"]:
+                raise ValueError(f"{path}: locked shares exceed held shares")
+
+        def _split_bounds(raw: str) -> tuple[date, date]:
+            start_text, _, end_text = raw.partition("/")
+            return parse_date(start_text), parse_date(end_text)
+
+        splits = document["performance"]["splits"]
+        in_sample_end = _split_bounds(splits["in_sample"])[1]
+        validation_start, validation_end = _split_bounds(splits["validation"])
+        out_of_sample_start = _split_bounds(splits["out_of_sample"])[0]
+        if not (in_sample_end < validation_start <= validation_end < out_of_sample_start):
+            raise ValueError(f"{path}: splits must be ordered and disjoint")
+        leak_checks = document["performance"]["leak_checks"]
+        check_ids = [item["check_id"] for item in leak_checks]
+        if len(check_ids) != len(set(check_ids)):
+            raise ValueError(f"{path}: duplicate leak check_id")
+
 
 def validate_registry() -> tuple[int, int]:
     registry = load_json(CONTRACTS / "registry.json")

@@ -185,3 +185,53 @@ def test_registry_accepts_both_coverage_audit_major_versions() -> None:
         if entry["contract_id"] == "coverage-audit"
     )
     assert versions == ["1.0.0", "2.0.0"]
+
+
+def web_state() -> dict[str, object]:
+    return json.loads(
+        (ROOT / "contracts/examples/web-state.example.json").read_text(encoding="utf-8")
+    )
+
+
+def test_registry_includes_web_state_contract() -> None:
+    registry = json.loads(
+        (ROOT / "contracts/registry.json").read_text(encoding="utf-8")
+    )
+    entries = [
+        entry
+        for entry in registry["contracts"]
+        if entry["contract_id"] == "web-state"
+    ]
+    assert [entry["schema_version"] for entry in entries] == ["1.0.0"]
+
+
+def test_web_state_rank_sequence_must_be_contiguous() -> None:
+    document = web_state()
+    rankings = document["rankings"]
+    assert isinstance(rankings, list)
+    rankings[1]["rank"] = 3
+
+    with pytest.raises(ValueError, match="1..N sequence"):
+        validate_semantics("web-state", document, DOCUMENT)
+
+
+def test_web_state_portfolio_accounting_must_balance() -> None:
+    document = web_state()
+    portfolio = document["portfolio"]
+    assert isinstance(portfolio, dict)
+    portfolio["total_assets"] = 500999.0
+
+    with pytest.raises(ValueError, match="total_assets"):
+        validate_semantics("web-state", document, DOCUMENT)
+
+
+def test_web_state_splits_must_be_ordered_and_disjoint() -> None:
+    document = web_state()
+    performance = document["performance"]
+    assert isinstance(performance, dict)
+    splits = performance["splits"]
+    assert isinstance(splits, dict)
+    splits["validation"] = "2026-07-20/2026-07-27"
+
+    with pytest.raises(ValueError, match="ordered and disjoint"):
+        validate_semantics("web-state", document, DOCUMENT)

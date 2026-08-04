@@ -101,6 +101,12 @@
       "schema_version": "1.0.0",
       "schema": "schemas/stage-health.schema.json",
       "examples": ["examples/stage-health.example.json"]
+    },
+    {
+      "contract_id": "web-state",
+      "schema_version": "1.0.0",
+      "schema": "schemas/web-state.schema.json",
+      "examples": ["examples/web-state.example.json"]
     }
   ]
 }

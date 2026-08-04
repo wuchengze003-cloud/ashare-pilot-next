@@ -1,0 +1,107 @@
+{
+  "contract_id": "web-state",
+  "schema_version": "1.0.0",
+  "state_id": "fixture-live-state-20260729T080000Z",
+  "as_of": "2026-07-29",
+  "generated_at": "2026-07-29T08:00:00Z",
+  "data_source": {
+    "source_id": "synthetic-fixture",
+    "is_official_vendor": false,
+    "mode": "synthetic",
+    "latest_trade_date": "2026-07-29",
+    "notices": ["SYNTHETIC_EXAMPLE_NOT_REAL_MARKET_DATA"]
+  },
+  "market": {
+    "calendar_date": "2026-07-29",
+    "is_open": false,
+    "session_label": "CLOSED"
+  },
+  "model": {
+    "strategy_id": "fixture-baseline",
+    "strategy_version": "v1",
+    "adapter_sha256": "a692698ca214c8354c927ad11998958f834edfdbafe3ac0b507f8587651aa86a",
+    "training_cutoff": "2026-07-27",
+    "validation_cutoff": "2026-07-28",
+    "backtest_window": {"start": "2026-07-01", "end": "2026-07-29"},
+    "feature_names": ["close_return_1d", "volume_ratio_5d"]
+  },
+  "rankings": [
+    {
+      "symbol": "000001.SZ",
+      "rank": 1,
+      "score": 0.61,
+      "recommendation": "BUY",
+      "confidence": 0.66,
+      "price_band": {"low": 9.8, "high": 10.0},
+      "factors": [
+        {"name": "close_return_5d", "weight": 0.31},
+        {"name": "volume_ratio_5d", "weight": 0.22}
+      ],
+      "risk_notes": ["SYNTHETIC_EXAMPLE"]
+    },
+    {
+      "symbol": "600000.SH",
+      "rank": 2,
+      "score": 0.42,
+      "recommendation": "WATCH",
+      "confidence": 0.51,
+      "price_band": null,
+      "factors": [{"name": "close_return_5d", "weight": 0.31}],
+      "risk_notes": ["SYNTHETIC_EXAMPLE"]
+    }
+  ],
+  "portfolio": {
+    "initial_capital": 500000,
+    "cash": 399710.5,
+    "market_value": 100300.0,
+    "total_assets": 500010.5,
+    "positions": [
+      {
+        "symbol": "000001.SZ",
+        "shares": 10000,
+        "locked_shares": 0,
+        "avg_cost": 9.95,
+        "last_price": 10.03,
+        "market_value": 100300.0,
+        "weight": 0.200596
+      }
+    ],
+    "recent_actions": [
+      {
+        "trade_date": "2026-07-29",
+        "symbol": "000001.SZ",
+        "side": "buy",
+        "shares": 10000,
+        "price": 9.95,
+        "gross_amount": 99500.0,
+        "total_cost": 34.83,
+        "reason": "MODEL_TOP_SCORE"
+      }
+    ]
+  },
+  "performance": {
+    "nav_curve": [
+      {"trade_date": "2026-07-28", "nav": 1.0, "benchmark_nav": 1.0},
+      {"trade_date": "2026-07-29", "nav": 1.000021, "benchmark_nav": 0.9995}
+    ],
+    "metrics": {
+      "total_return": 2.1e-05,
+      "benchmark_total_return": -0.0005,
+      "max_drawdown": 0.0,
+      "win_rate": 1.0,
+      "turnover": 0.199
+    },
+    "splits": {
+      "in_sample": "2026-07-01/2026-07-21",
+      "validation": "2026-07-22/2026-07-27",
+      "out_of_sample": "2026-07-28/2026-07-29"
+    },
+    "leak_checks": [
+      {
+        "check_id": "temporal_split_monotonic",
+        "status": "pass",
+        "detail": "train_end < validation_end < test_end"
+      }
+    ]
+  }
+}
