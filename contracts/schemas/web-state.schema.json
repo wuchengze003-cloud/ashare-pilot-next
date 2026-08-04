@@ -86,7 +86,13 @@
         "feature_names": {
           "type": "array",
           "items": {"type": "string", "minLength": 1, "maxLength": 60}
-        }
+        },
+        "validation_ic_mean": {"type": "number"},
+        "signal_sequence": {"type": "integer", "minimum": 0},
+        "signal_state": {
+          "enum": ["ACTIVE", "HOLD", "REDUCE_ONLY", "FLAT", "UNAVAILABLE"]
+        },
+        "dataset_id": {"type": "string", "minLength": 1, "maxLength": 160}
       }
     },
     "rankings": {
