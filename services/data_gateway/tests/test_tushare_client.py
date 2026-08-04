@@ -25,6 +25,8 @@ from ashare_data_gateway.tushare_client import (
 from ashare_data_gateway.tushare_models import (
     AdjFactorRecord,
     DailyBarRecord,
+    StockBasicBatchResult,
+    SuspendRecord,
     TradeCalRecord,
 )
 from ashare_data_gateway.tushare_transport import (
@@ -344,10 +346,13 @@ class TestTradeCal:
         monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
         response = make_response(("exchange", "cal_date"), [["SSE", "20260101"]])
         client, _ = make_client([response])
-        with pytest.raises(ValueError, match="missing expected field"):
+        with pytest.raises(
+            ValueError, match="response fields do not match request"
+        ) as excinfo:
             client.fetch_trade_cal(
                 exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 1)
             )
+        assert _collect_leaked_frames(excinfo.tb, _CANARY) == []
 
     def test_duplicate_primary_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
@@ -384,6 +389,26 @@ class TestTradeCal:
                 exchange="SSE", start_date=date(2026, 2, 1), end_date=date(2026, 1, 1)
             )
 
+    def test_response_is_bound_to_exchange_and_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        wrong_exchange, _ = make_client(
+            [make_response(TRADE_CAL_FIELDS, [["SZSE", "20260102", 1, None]])]
+        )
+        with pytest.raises(ValueError, match="does not match requested"):
+            wrong_exchange.fetch_trade_cal(
+                exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 31)
+            )
+
+        outside_window, _ = make_client(
+            [make_response(TRADE_CAL_FIELDS, [["SSE", "20260201", 1, None]])]
+        )
+        with pytest.raises(ValueError, match="outside request window"):
+            outside_window.fetch_trade_cal(
+                exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 31)
+            )
+
 
 # ---------------------------------------------------------------------------
 # stock_basic tests
@@ -416,6 +441,34 @@ class TestStockBasic:
         req, _ = transport.requests[0]
         assert req.api_name == "stock_basic"
 
+    def test_nullable_reference_text_keeps_existing_empty_string_semantics(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        response = make_response(
+            STOCK_BASIC_FIELDS,
+            [
+                [
+                    "600466.SH",
+                    "600466",
+                    "蓝光发展",
+                    None,
+                    None,
+                    None,
+                    "20010212",
+                    "20230606",
+                    "D",
+                ]
+            ],
+        )
+        client, _ = make_client([response])
+
+        result = client.fetch_stock_basic(list_status="D")
+
+        assert result[0].area == ""
+        assert result[0].industry == ""
+        assert result[0].market == ""
+
     def test_invalid_symbol_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
         response = make_response(
@@ -424,7 +477,7 @@ class TestStockBasic:
               "19910403", None, "L"]],
         )
         client, _ = make_client([response])
-        with pytest.raises(ValueError, match="invalid symbol format"):
+        with pytest.raises(ValueError, match="rejected invalid vendor ts_code"):
             client.fetch_stock_basic()
 
     def test_duplicate_ts_code_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -448,6 +501,152 @@ class TestStockBasic:
         client, _ = make_client([response])
         with pytest.raises(ValueError, match="ts_code/symbol mismatch"):
             client.fetch_stock_basic()
+
+    def test_reconciles_known_noncanonical_delisted_codes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        response = make_response(
+            STOCK_BASIC_FIELDS,
+            [
+                [
+                    "600466.SH",
+                    "600466",
+                    "蓝光发展",
+                    "四川",
+                    "房地产",
+                    "主板",
+                    "20010212",
+                    "20230606",
+                    "D",
+                ],
+                [
+                    "T600018.SH",
+                    "T600018",
+                    "上港集箱(退)",
+                    "上海",
+                    "港口",
+                    "主板",
+                    "20000719",
+                    "20061020",
+                    "D",
+                ],
+                [
+                    "TS0018.SH",
+                    "TS0018",
+                    "上港集箱(退)",
+                    "上海",
+                    "港口",
+                    "主板",
+                    "20000719",
+                    None,
+                    "D",
+                ],
+            ],
+        )
+        client, _ = make_client([response])
+
+        result = client.fetch_stock_basic_reconciled(list_status="D")
+
+        assert isinstance(result, StockBasicBatchResult)
+        assert result.raw_row_count == 3
+        assert len(result.accepted) == 1
+        assert tuple(item.vendor_ts_code for item in result.rejected) == (
+            "T600018.SH",
+            "TS0018.SH",
+        )
+        assert all(item.reason == "INVALID_VENDOR_TS_CODE" for item in result.rejected)
+        assert all(len(item.row_fingerprint) == 64 for item in result.rejected)
+        assert result.raw_row_count == len(result.accepted) + len(result.rejected)
+
+    def test_reconciled_batch_still_fails_on_malformed_companion_field(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        response = make_response(
+            STOCK_BASIC_FIELDS,
+            [
+                [
+                    "T600018.SH",
+                    "T600018",
+                    None,
+                    None,
+                    "港口",
+                    "主板",
+                    "20000719",
+                    "20061020",
+                    "D",
+                ]
+            ],
+        )
+        client, _ = make_client([response])
+
+        with pytest.raises(ValueError, match="field name must be str"):
+            client.fetch_stock_basic_reconciled(list_status="D")
+
+    def test_reconciled_batch_does_not_reclassify_non_string_code(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        response = make_response(
+            STOCK_BASIC_FIELDS,
+            [
+                [
+                    600018,
+                    "600018",
+                    "类型损坏",
+                    None,
+                    None,
+                    None,
+                    "20000719",
+                    "20061020",
+                    "D",
+                ]
+            ],
+        )
+        client, _ = make_client([response])
+
+        with pytest.raises(ValueError, match="symbol must be str, got int"):
+            client.fetch_stock_basic_reconciled(list_status="D")
+
+    def test_reconciled_batch_binds_returned_status(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        response = make_response(
+            STOCK_BASIC_FIELDS,
+            [
+                [
+                    "000001.SZ",
+                    "000001",
+                    "平安银行",
+                    "深圳",
+                    "银行",
+                    "主板",
+                    "19910403",
+                    None,
+                    "L",
+                ]
+            ],
+        )
+        client, _ = make_client([response])
+
+        with pytest.raises(ValueError, match="does not match requested 'D'"):
+            client.fetch_stock_basic_reconciled(list_status="D")
+
+    def test_reconciled_pending_empty_set_is_valid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        client, _ = make_client(
+            [TransportResponse(code=0, msg="", fields=STOCK_BASIC_FIELDS, items=())]
+        )
+
+        result = client.fetch_stock_basic_reconciled(list_status="P")
+
+        assert result.raw_row_count == 0
+        assert result.accepted == ()
+        assert result.rejected == ()
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +763,34 @@ class TestDaily:
                 ts_code="000001.SZ", start_date=date(2026, 1, 2), end_date=date(2026, 1, 2)
             )
 
+    @pytest.mark.parametrize(
+        ("row_code", "row_date", "match"),
+        [
+            ("600519.SH", "20260102", "does not match requested"),
+            ("000001.SZ", "20260103", "outside request window"),
+        ],
+    )
+    def test_response_is_bound_to_symbol_and_window(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        row_code: str,
+        row_date: str,
+        match: str,
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        response = make_response(
+            DAILY_FIELDS,
+            [[row_code, row_date, 10.5, 11.0, 10.2, 10.8, 100.0, 200.0]],
+        )
+        client, _ = make_client([response])
+
+        with pytest.raises(ValueError, match=match):
+            client.fetch_daily(
+                ts_code="000001.SZ",
+                start_date=date(2026, 1, 2),
+                end_date=date(2026, 1, 2),
+            )
+
 
 # ---------------------------------------------------------------------------
 # adj_factor tests
@@ -625,6 +852,167 @@ class TestAdjFactor:
         with pytest.raises(ValueError, match="non-finite"):
             client.fetch_adj_factor(
                 ts_code="000001.SZ", start_date=date(2026, 1, 2), end_date=date(2026, 1, 2)
+            )
+
+    @pytest.mark.parametrize(
+        ("row_code", "row_date", "match"),
+        [
+            ("600519.SH", "20260102", "does not match requested"),
+            ("000001.SZ", "20260103", "outside request window"),
+        ],
+    )
+    def test_response_is_bound_to_symbol_and_window(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        row_code: str,
+        row_date: str,
+        match: str,
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        response = make_response(ADJ_FACTOR_FIELDS, [[row_code, row_date, 1.2]])
+        client, _ = make_client([response])
+
+        with pytest.raises(ValueError, match=match):
+            client.fetch_adj_factor(
+                ts_code="000001.SZ",
+                start_date=date(2026, 1, 2),
+                end_date=date(2026, 1, 2),
+            )
+
+
+# ---------------------------------------------------------------------------
+# suspend_d tests
+# ---------------------------------------------------------------------------
+
+SUSPEND_FIELDS = ("ts_code", "trade_date", "suspend_timing", "suspend_type")
+
+
+class TestSuspendD:
+    def test_multi_symbol_request_retains_both_s_and_r(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        response = make_response(
+            SUSPEND_FIELDS,
+            [
+                ["600530.SH", "20230703", None, "S"],
+                ["600530.SH", "20230703", "09:30-10:30", "R"],
+                ["002564.SZ", "20230810", "09:30-15:00", "S"],
+            ],
+        )
+        client, transport = make_client([response])
+
+        result = client.fetch_suspend_d(
+            ts_codes=("600530.SH", "002564.SZ", "600530.SH"),
+            start_date=date(2023, 6, 1),
+            end_date=date(2023, 10, 31),
+        )
+
+        assert result == (
+            SuspendRecord("600530.SH", date(2023, 7, 3), None, "S"),
+            SuspendRecord("600530.SH", date(2023, 7, 3), "09:30-10:30", "R"),
+            SuspendRecord("002564.SZ", date(2023, 8, 10), "09:30-15:00", "S"),
+        )
+        request, _ = transport.requests[0]
+        assert request.api_name == "suspend_d"
+        assert request.params == (
+            ("ts_code", "002564.SZ,600530.SH"),
+            ("start_date", "20230601"),
+            ("end_date", "20231031"),
+        )
+        assert not any(name == "suspend_type" for name, _ in request.params)
+
+    @pytest.mark.parametrize("suspend_type", ["", "X", "s", 1, None])
+    def test_invalid_suspend_type_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch, suspend_type: object
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        client, _ = make_client(
+            [
+                make_response(
+                    SUSPEND_FIELDS,
+                    [["600530.SH", "20230703", None, suspend_type]],
+                )
+            ]
+        )
+
+        with pytest.raises(ValueError, match="suspend_type"):
+            client.fetch_suspend_d(
+                ts_codes=("600530.SH",),
+                start_date=date(2023, 6, 1),
+                end_date=date(2023, 10, 31),
+            )
+
+    def test_unrequested_symbol_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        client, _ = make_client(
+            [
+                make_response(
+                    SUSPEND_FIELDS,
+                    [["000001.SZ", "20230703", None, "S"]],
+                )
+            ]
+        )
+
+        with pytest.raises(ValueError, match="was not requested"):
+            client.fetch_suspend_d(
+                ts_codes=("600530.SH",),
+                start_date=date(2023, 6, 1),
+                end_date=date(2023, 10, 31),
+            )
+
+    def test_out_of_window_date_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        client, _ = make_client(
+            [
+                make_response(
+                    SUSPEND_FIELDS,
+                    [["600530.SH", "20231101", None, "S"]],
+                )
+            ]
+        )
+
+        with pytest.raises(ValueError, match="outside request window"):
+            client.fetch_suspend_d(
+                ts_codes=("600530.SH",),
+                start_date=date(2023, 6, 1),
+                end_date=date(2023, 10, 31),
+            )
+
+    def test_duplicate_primary_key_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        row = ["600530.SH", "20230703", None, "S"]
+        client, _ = make_client([make_response(SUSPEND_FIELDS, [row, row])])
+
+        with pytest.raises(ValueError, match="duplicate primary key"):
+            client.fetch_suspend_d(
+                ts_codes=("600530.SH",),
+                start_date=date(2023, 6, 1),
+                end_date=date(2023, 10, 31),
+            )
+
+    def test_empty_symbol_set_and_reversed_window_are_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        client, _ = make_client([])
+        with pytest.raises(ValueError, match="cannot be empty"):
+            client.fetch_suspend_d(
+                ts_codes=(),
+                start_date=date(2023, 6, 1),
+                end_date=date(2023, 10, 31),
+            )
+        with pytest.raises(ValueError, match="cannot precede"):
+            client.fetch_suspend_d(
+                ts_codes=("600530.SH",),
+                start_date=date(2023, 10, 31),
+                end_date=date(2023, 6, 1),
             )
 
 
@@ -752,30 +1140,103 @@ class TestPagination:
         assert transport.requests[1][0].offset == 3
         assert transport.requests[1][0].limit == 3
 
-    def test_inconsistent_fields_across_pages_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_cross_page_field_order_is_normalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
         page1 = make_response(
-            TRADE_CAL_FIELDS,
-            [["SSE", "20260101", 1, None]] * 3,
+            ("cal_date", "exchange", "pretrade_date", "is_open"),
+            [
+                ["20260101", "SSE", None, 0],
+                ["20260102", "SSE", "20260101", 1],
+            ],
         )
         page2 = make_response(
-            ("exchange", "cal_date"),  # different fields
-            [["SSE", "20260102"]],
+            ("is_open", "pretrade_date", "exchange", "cal_date"),
+            [[1, "20260102", "SSE", "20260103"]],
         )
-        client, _ = make_client([page1, page2], page_size=3)
-        with pytest.raises(ValueError, match="inconsistent fields"):
+        client, _ = make_client([page1, page2], page_size=2)
+
+        result = client.fetch_trade_cal(
+            exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 3)
+        )
+
+        assert result == (
+            TradeCalRecord(
+                exchange="SSE",
+                cal_date=date(2026, 1, 1),
+                is_open=0,
+                pretrade_date=None,
+            ),
+            TradeCalRecord(
+                exchange="SSE",
+                cal_date=date(2026, 1, 2),
+                is_open=1,
+                pretrade_date=date(2026, 1, 1),
+            ),
+            TradeCalRecord(
+                exchange="SSE",
+                cal_date=date(2026, 1, 3),
+                is_open=1,
+                pretrade_date=date(2026, 1, 2),
+            ),
+        )
+
+    @pytest.mark.parametrize(
+        ("response_fields", "row", "expected_message"),
+        [
+            (
+                ("exchange", "cal_date", "is_open", "is_open"),
+                ["SSE", "20260101", 1, 1],
+                "duplicate response fields",
+            ),
+            (
+                ("exchange", "cal_date", "is_open"),
+                ["SSE", "20260101", 1],
+                "response fields do not match request",
+            ),
+            (
+                TRADE_CAL_FIELDS + ("unexpected",),
+                ["SSE", "20260101", 1, None, "extra"],
+                "response fields do not match request",
+            ),
+        ],
+    )
+    def test_response_field_schema_must_exactly_match_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        response_fields: tuple[str, ...],
+        row: list[object],
+        expected_message: str,
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        client, _ = make_client([make_response(response_fields, [row])])
+
+        with pytest.raises(ValueError, match=expected_message):
             client.fetch_trade_cal(
-                exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 4)
+                exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 1)
             )
 
-    def test_empty_result_returns_empty_tuple(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "row",
+        [
+            ["SSE", "20260101", 1],
+            ["SSE", "20260101", 1, None, "extra"],
+        ],
+    )
+    def test_row_width_must_match_response_fields(
+        self, monkeypatch: pytest.MonkeyPatch, row: list[object]
     ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        client, _ = make_client([make_response(TRADE_CAL_FIELDS, [row])])
+
+        with pytest.raises(ValueError, match="values for 4 fields"):
+            client.fetch_trade_cal(
+                exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 1)
+            )
+
+    def test_empty_result_returns_empty_tuple(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Legitimate empty result (no data in range) returns () without error."""
         monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
-        response = TransportResponse(code=0, msg="", fields=(), items=())
+        response = TransportResponse(code=0, msg="", fields=TRADE_CAL_FIELDS, items=())
         client, _ = make_client([response])
         result = client.fetch_trade_cal(
             exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 1)
@@ -783,7 +1244,7 @@ class TestPagination:
         assert result == ()
 
     def test_page2_null_data_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """If page 2 has items but empty fields, pagination must fail closed."""
+        """If page 2 omits its schema, pagination must fail closed."""
         monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
         page1 = make_response(
             TRADE_CAL_FIELDS,
@@ -794,10 +1255,45 @@ class TestPagination:
             items=(("SSE", "20260104", 1, None),),
         )
         client, _ = make_client([page1, page2], page_size=3)
-        with pytest.raises(ValueError, match="items but empty fields"):
+        with pytest.raises(ValueError, match="response fields do not match request"):
             client.fetch_trade_cal(
                 exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 4)
             )
+
+    def test_result_is_deterministic_across_page_boundaries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(TOKEN_ENV_VAR, _CANARY)
+        rows = [
+            ["SSE", "20260101", 0, None],
+            ["SSE", "20260102", 1, "20260101"],
+            ["SSE", "20260103", 1, "20260102"],
+        ]
+        client_two, transport_two = make_client(
+            [
+                make_response(TRADE_CAL_FIELDS, rows[:2]),
+                make_response(TRADE_CAL_FIELDS, rows[2:]),
+            ],
+            page_size=2,
+        )
+        client_three, transport_three = make_client(
+            [
+                make_response(TRADE_CAL_FIELDS, rows),
+                make_response(TRADE_CAL_FIELDS, []),
+            ],
+            page_size=3,
+        )
+
+        result_two = client_two.fetch_trade_cal(
+            exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 3)
+        )
+        result_three = client_three.fetch_trade_cal(
+            exchange="SSE", start_date=date(2026, 1, 1), end_date=date(2026, 1, 3)
+        )
+
+        assert result_two == result_three
+        assert [request.offset for request, _ in transport_two.requests] == [0, 2]
+        assert [request.offset for request, _ in transport_three.requests] == [0, 3]
 
     def test_max_pages_exceeded_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Pagination must not loop forever if vendor always returns full pages."""

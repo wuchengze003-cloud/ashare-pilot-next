@@ -39,6 +39,32 @@ def test_stale_dataset_fails_by_completed_trading_sessions() -> None:
     assert result.reason_codes == ("DATA_STALE",)
 
 
+def test_exactly_ten_completed_trading_sessions_behind_is_stale() -> None:
+    trading_days = (
+        date(2026, 7, 16),
+        date(2026, 7, 17),
+        date(2026, 7, 20),
+        date(2026, 7, 21),
+        date(2026, 7, 22),
+        date(2026, 7, 23),
+        date(2026, 7, 24),
+        date(2026, 7, 27),
+        date(2026, 7, 28),
+        date(2026, 7, 29),
+        date(2026, 7, 30),
+    )
+
+    result = assess_dataset_freshness(
+        expected_as_of=trading_days[-1],
+        latest_complete_date=trading_days[0],
+        trading_days=trading_days,
+    )
+
+    assert result.lag_sessions == 10
+    assert result.passed is False
+    assert result.reason_codes == ("DATA_STALE",)
+
+
 def test_unknown_or_future_dates_fail_closed() -> None:
     unknown = assess_dataset_freshness(
         expected_as_of=date(2026, 7, 31),

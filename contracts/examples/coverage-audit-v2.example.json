@@ -1,0 +1,29 @@
+{
+  "contract_id": "coverage-audit",
+  "schema_version": "2.0.0",
+  "audit_id": "fixture-coverage-v2-20260720",
+  "universe_policy_id": "fixture-index",
+  "universe_policy_version": "v1",
+  "window_start": "2026-07-20",
+  "window_end": "2026-07-21",
+  "generated_at": "2026-07-25T08:00:00Z",
+  "expected_member_count": null,
+  "open_trade_days": 2,
+  "expected_member_days": 3,
+  "bar_member_days": 2,
+  "suspended_member_days": 0,
+  "expected_delisted_member_day_count": 1,
+  "expected_delisted_member_days": [
+    {
+      "symbol": "000001.SZ",
+      "trade_date": "2026-07-20"
+    }
+  ],
+  "missing_member_days": [],
+  "silent_skip_symbols": [],
+  "delisted_symbols_in_scope": ["000001.SZ"],
+  "member_count_anomalies": [],
+  "provenance_warnings": ["NON_OFFICIAL_VENDOR_ENDPOINT"],
+  "passed": true,
+  "reason_codes": []
+}
