@@ -36,6 +36,13 @@ M1 只验证一条真实供应商行情能否经过不可变原始快照、标�
 - Git 只保留实现、测试、文档和纯合成样例。
 - 不复制或链接旧项目的 runtime、数据文件、SQLite、报告、环境文件或部署状态。
   旧项目只能用于只读核对供应商行为、字段单位和测试意图。
+- M1 发布后可在系统临时目录用一次性脚本将新数据集与旧项目中冻结的原始 Parquet
+  按 `(ts_code, trade_date)` 做只读全外连接；不读取可变 SQLite 缓存。旧数据只是对照管线，
+  不是独立供应商或真值，不参与新数据集的
+  生成、补齐或质量 AC 的自动通过判定。脚本、原始差异和生成摘要不追踪到 Git；
+  PR 正文只记录
+  新独有、旧独有、字段不一致的计数和已完成的差异归因。任何未归因差异都阻断
+  M1 收口，但不得使用旧值自动覆盖新数据。
 - M1 不做复权应用、策略、回测、赛马、全市场历史扩展、主动限流、Web 或生产发布。
 
 ## 验收条件
@@ -45,7 +52,8 @@ M1 只验证一条真实供应商行情能否经过不可变原始快照、标�
 对每个位于成员有效期内的开市成员日，只允许四种结果：
 
 1. 存在已验证的 `daily` bar；
-2. 不存在 bar，但同一证券、同一交易日存在 `suspend_d` 停牌证据；
+2. 不存在 bar，但同一证券、同一交易日存在 `suspend_d` 记录，
+   且 `suspend_type == "S"`；`suspend_type == "R"` 的复牌记录不构成缺失 bar 的合法解释；
 3. 当日是已验证的 `delist_date`，且不存在 bar 或停牌证据，分类为
    `EXPECTED_DELISTED`；
 4. `MISSING`。
@@ -102,6 +110,10 @@ implied_vwap = amount / volume
 `[low * 0.95, high * 1.05]` 内。越界记录必须作为结构化质量问题输出并使数据集失败；
 不使用固定的 1 元下限，因为真实低价和退市整理期行情可低于 1 元。
 
+M1 不设置固定成交量阈值的自动豁免。若后续真实数据证明成交额量化误差会导致
+假失败，必须根据已验证的供应商成交额精度计算误差区间，并先修订本 AC；不按
+未验证的固定股数静默放行。
+
 ### AC-6：新鲜度门禁失败关闭
 
 显式 `as_of` 比数据最后完整交易日晚 10 个已完成交易日时：
@@ -128,9 +140,28 @@ implied_vwap = amount / volume
 
 每次 transport send 都计为一次 HTTP 尝试；分页和每次重试都单独计数。限频错误同时
 计入短暂错误。不使用预先假设的请求总数代替真实 transport 计数。
+遥测由组合在基础 Transport 之外的计数装饰器产生，不改变 `HttpJsonTransport` 的请求、
+安全或失败语义。
+
+遥测还必须记录 `daily` 与 `adj_factor` 的交易日键差异：`daily_only_keys`、
+`adj_factor_only_keys` 和 `matched_keys`。M1 不应用复权因子，因此差异本身不使数据集失败；
+三类计数必须可审计，为 M4 提供输入。
 
 遥测不写入 Dataset Manifest 2.0，也不参与 `dataset_id` 或文件内容哈希。这避免
 非确定耗时污染数据身份，也避免在 M1 无意中改变已发布合同。
+
+### AC-9：数据来源可追溯
+
+每次采集必须从实际 Transport 配置解析来源主机，不依赖运行者声明。遥测证据
+至少包含：
+
+- `base_url_host`：小写的实际 hostname，不含 token、用户信息、端口、路径、查询参数或片段；
+- `is_official_vendor`：仅当 `base_url_host == "api.tushare.pro"` 时为 `true`。
+
+Dataset Manifest 2.0 的 `source` 必须区分 `tushare-official` 和
+`tushare-via-non-official-endpoint`。若 `is_official_vendor == false`，Coverage Audit 新主版本
+必须在 `provenance_warnings` 中包含 `NON_OFFICIAL_VENDOR_ENDPOINT`。非官方端点本身不使
+数据集失败，但来源不得被记录为官方、省略或在后续产物中丢失。
 
 ## 实现和审查停止规则
 
@@ -143,5 +174,5 @@ uv run python tools/validate_contracts.py
 uv run python tools/check_boundaries.py
 ```
 
-评审只判定 AC-1 至 AC-8 和现有仓库边界是否满足。AC 之外的改进建议单独记录，
+评审只判定 AC-1 至 AC-9 和现有仓库边界是否满足。AC 之外的改进建议单独记录，
 不扩大 M1 实现范围。
