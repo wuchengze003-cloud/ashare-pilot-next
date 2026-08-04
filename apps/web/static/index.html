@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A股 ML 选股驾驶舱（模拟）</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #21262d; --text: #e6edf3;
+    --muted: #8b949e; --buy: #3fb950; --sell: #f85149; --hold: #d29922;
+    --watch: #8b949e; --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+           padding: 14px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 17px; margin: 0; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px;
+          border: 1px solid var(--line); color: var(--muted); }
+  .pill.ok { color: var(--buy); border-color: var(--buy); }
+  .pill.warn { color: var(--hold); border-color: var(--hold); }
+  .pill.bad { color: var(--sell); border-color: var(--sell); }
+  main { padding: 16px 20px; display: grid; gap: 16px; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 8px; padding: 14px 16px; }
+  section h2 { font-size: 14px; margin: 0 0 10px; color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line);
+           white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .rec-BUY { color: var(--buy); font-weight: 600; }
+  .rec-SELL { color: var(--sell); font-weight: 600; }
+  .rec-HOLD { color: var(--hold); font-weight: 600; }
+  .rec-WATCH { color: var(--watch); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+           gap: 10px; }
+  .card { background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+          padding: 10px 12px; }
+  .card .label { color: var(--muted); font-size: 12px; }
+  .card .value { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .notes { color: var(--hold); font-size: 12px; }
+  .banner { padding: 10px 20px; background: #3d1d1d; color: #ffa1a1; font-size: 13px; }
+  .up { color: var(--buy); } .down { color: var(--sell); }
+  svg { width: 100%; height: 180px; }
+  .legend { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .factors { color: var(--muted); font-size: 12px; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>A股机器学习选股驾驶舱</h1>
+  <span class="pill" id="market-status">市场状态：加载中</span>
+  <span class="pill" id="data-time">数据时间：加载中</span>
+  <span class="pill" id="model-info">模型：加载中</span>
+  <span class="pill warn">模拟组合 · 仅目标仓位建议 · 不构成投资意见</span>
+</header>
+<div id="banner" class="banner" style="display:none"></div>
+<main>
+  <section>
+    <h2>组合概览（初始资金 ¥500,000）</h2>
+    <div class="cards" id="portfolio-cards"></div>
+  </section>
+  <section>
+    <h2>净值曲线（样本外 · 对比基准=试点标的等权）</h2>
+    <svg id="nav-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg>
+    <div class="legend" id="nav-legend"></div>
+  </section>
+  <section>
+    <h2>模型评分与买卖建议</h2>
+    <div class="scroll"><table id="rankings"></table></div>
+  </section>
+  <section>
+    <h2>当前模拟持仓（T+1：锁定股数当日不可卖）</h2>
+    <div class="scroll"><table id="positions"></table></div>
+  </section>
+  <section>
+    <h2>最近买卖动作</h2>
+    <div class="scroll"><table id="actions"></table></div>
+  </section>
+  <section>
+    <h2>回测可信度与防泄漏检查</h2>
+    <div class="cards" id="metric-cards"></div>
+    <table id="leak-checks" style="margin-top:10px"></table>
+    <div class="legend" id="split-info"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const fmtPct = (v) => (v * 100).toFixed(2) + "%";
+const fmtCny = (v) => "¥" + Number(v).toLocaleString("zh-CN", {maximumFractionDigits: 2});
+const fmtNum = (v) => Number(v).toFixed(4);
+
+function pill(el, text, cls) { el.textContent = text; el.className = "pill" + (cls ? " " + cls : ""); }
+
+async function fetchJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+function renderMarket(market, state) {
+  if (!market || !state) { pill($("market-status"), "市场状态：未知", ""); return; }
+  const labels = { OPEN: "开盘中", PRE_OPEN: "集合竞价", MIDDAY_BREAK: "午间休市",
+                   CLOSED: "已收盘", HOLIDAY: "休市", UNKNOWN: "未知" };
+  const label = labels[market.session_label] || market.session_label;
+  pill($("market-status"), `市场：${label} · ${market.calendar_date}`,
+       market.is_open ? "ok" : "");
+  const src = state.data_source;
+  const official = src.is_official_vendor ? "官方源" : "非官方转发通道";
+  pill($("data-time"), `数据截至 ${src.latest_trade_date} · ${src.mode} · ${official}`,
+       src.is_official_vendor ? "ok" : "warn");
+  const model = state.model;
+  pill($("model-info"),
+       `模型 ${model.strategy_id}@${model.strategy_version} · 训练截止 ${model.training_cutoff} · 信号 ${model.signal_state}#${model.signal_sequence}`,
+       model.signal_state === "ACTIVE" ? "ok" : "warn");
+}
+
+function renderBanner(state, err) {
+  const notices = [];
+  if (err && err.error) notices.push(`刷新失败（${err.error}）：${err.detail || ""}`);
+  if (state) notices.push(...state.data_source.notices);
+  const banner = $("banner");
+  if (!notices.length) { banner.style.display = "none"; return; }
+  banner.style.display = "block";
+  banner.textContent = "⚠ " + notices.join(" ｜ ");
+}
+
+function renderPortfolio(state) {
+  const p = state.portfolio;
+  const ret = p.total_assets / p.initial_capital - 1;
+  const cards = [
+    ["总资产", fmtCny(p.total_assets)],
+    ["现金", fmtCny(p.cash)],
+    ["持仓市值", fmtCny(p.market_value)],
+    ["组合收益", `<span class="${ret >= 0 ? "up" : "down"}">${fmtPct(ret)}</span>`],
+    ["持仓数", String(p.positions.length)],
+  ];
+  $("portfolio-cards").innerHTML = cards.map(([label, value]) =>
+    `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`
+  ).join("");
+}
+
+function renderNav(state) {
+  const svg = $("nav-chart");
+  const curve = state.performance.nav_curve;
+  if (!curve.length) { svg.innerHTML = ""; return; }
+  const w = 800, h = 180, pad = 8;
+  const all = curve.flatMap((pt) => [pt.nav, pt.benchmark_nav]);
+  const min = Math.min(...all), max = Math.max(...all);
+  const span = max - min || 1;
+  const x = (i) => pad + (i / (curve.length - 1 || 1)) * (w - 2 * pad);
+  const y = (v) => h - pad - ((v - min) / span) * (h - 2 * pad);
+  const path = (key) => curve.map((pt, i) =>
+    `${i ? "L" : "M"}${x(i).toFixed(1)},${y(pt[key]).toFixed(1)}`).join(" ");
+  svg.innerHTML =
+    `<path d="${path("nav")}" fill="none" stroke="#58a6ff" stroke-width="2"/>` +
+    `<path d="${path("benchmark_nav")}" fill="none" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  const last = curve[curve.length - 1];
+  $("nav-legend").textContent =
+    `最新净值 ${last.nav.toFixed(4)}（蓝） vs 基准 ${last.benchmark_nav.toFixed(4)}（灰虚线）· ` +
+    `区间 ${curve[0].trade_date} → ${last.trade_date}`;
+}
+
+function renderRankings(state) {
+  const head = `<tr><th>#</th><th>代码</th><th class="num">评分</th><th>建议</th>` +
+    `<th class="num">置信度</th><th class="num">建议买入区间</th><th>主要影响因素</th><th>风险提示</th></tr>`;
+  const rows = state.rankings.map((item) => {
+    const band = item.price_band
+      ? `${item.price_band.low.toFixed(2)} – ${item.price_band.high.toFixed(2)}` : "—";
+    const factors = item.factors
+      .map((f) => `${f.name}(${f.weight.toFixed(2)})`).join(", ");
+    return `<tr><td>${item.rank}</td><td>${item.symbol}</td>` +
+      `<td class="num">${fmtNum(item.score)}</td>` +
+      `<td class="rec-${item.recommendation}">${item.recommendation}</td>` +
+      `<td class="num">${(item.confidence * 100).toFixed(1)}%</td>` +
+      `<td class="num">${band}</td>` +
+      `<td class="factors">${factors || "—"}</td>` +
+      `<td class="notes">${item.risk_notes.join("；") || "—"}</td></tr>`;
+  }).join("");
+  $("rankings").innerHTML = head + rows;
+}
+
+function renderPositions(state) {
+  const head = `<tr><th>代码</th><th class="num">持股</th><th class="num">T+1锁定</th>` +
+    `<th class="num">成本价</th><th class="num">现价</th><th class="num">市值</th><th class="num">权重</th></tr>`;
+  const rows = state.portfolio.positions.map((pos) =>
+    `<tr><td>${pos.symbol}</td><td class="num">${pos.shares}</td>` +
+    `<td class="num">${pos.locked_shares}</td>` +
+    `<td class="num">${pos.avg_cost.toFixed(2)}</td>` +
+    `<td class="num">${pos.last_price.toFixed(2)}</td>` +
+    `<td class="num">${fmtCny(pos.market_value)}</td>` +
+    `<td class="num">${fmtPct(pos.weight)}</td></tr>`).join("");
+  $("positions").innerHTML = head + (rows || `<tr><td colspan="7">空仓</td></tr>`);
+}
+
+function renderActions(state) {
+  const head = `<tr><th>日期</th><th>代码</th><th>方向</th><th class="num">股数</th>` +
+    `<th class="num">价格</th><th class="num">成交额</th><th class="num">费用</th><th>原因</th></tr>`;
+  const rows = state.portfolio.recent_actions.slice().reverse().map((act) =>
+    `<tr><td>${act.trade_date}</td><td>${act.symbol}</td>` +
+    `<td class="${act.side === "buy" ? "rec-BUY" : "rec-SELL"}">${act.side === "buy" ? "买入" : "卖出"}</td>` +
+    `<td class="num">${act.shares}</td><td class="num">${act.price.toFixed(2)}</td>` +
+    `<td class="num">${fmtCny(act.gross_amount)}</td><td class="num">${fmtCny(act.total_cost)}</td>` +
+    `<td class="factors">${act.reason}</td></tr>`).join("");
+  $("actions").innerHTML = head + (rows || `<tr><td colspan="8">暂无</td></tr>`);
+}
+
+function renderMetrics(state) {
+  const m = state.performance.metrics;
+  const model = state.model;
+  const cards = [
+    ["样本外总收益", fmtPct(m.total_return), m.total_return >= 0],
+    ["基准总收益", fmtPct(m.benchmark_total_return), m.benchmark_total_return >= 0],
+    ["最大回撤", fmtPct(m.max_drawdown), false],
+    ["日胜率", fmtPct(m.win_rate), m.win_rate >= 0.5],
+    ["换手率", fmtNum(m.turnover), true],
+    ["验证集 IC", fmtNum(model.validation_ic_mean), model.validation_ic_mean > 0],
+  ];
+  $("metric-cards").innerHTML = cards.map(([label, value, good]) =>
+    `<div class="card"><div class="label">${label}</div>` +
+    `<div class="value ${good ? "up" : "down"}">${value}</div></div>`).join("");
+  const head = `<tr><th>检查项</th><th>结果</th><th>说明</th></tr>`;
+  const rows = state.performance.leak_checks.map((check) =>
+    `<tr><td>${check.check_id}</td>` +
+    `<td class="${check.status === "pass" ? "rec-BUY" : "rec-SELL"}">${check.status}</td>` +
+    `<td class="factors">${check.detail}</td></tr>`).join("");
+  $("leak-checks").innerHTML = head + rows;
+  const s = state.performance.splits;
+  $("split-info").textContent =
+    `样本划分：样本内 ${s.in_sample} ｜ 验证集 ${s.validation} ｜ 样本外 ${s.out_of_sample} · ` +
+    `训练截止 ${model.training_cutoff} · 回测区间 ${model.backtest_window.start} → ${model.backtest_window.end} · ` +
+    `数据集 ${model.dataset_id}`;
+}
+
+async function refresh() {
+  const [state, market, err] = await Promise.all([
+    fetchJson("/api/web-state"), fetchJson("/api/market"), fetchJson("/api/refresh-error"),
+  ]);
+  renderMarket(market, state);
+  renderBanner(state, err);
+  if (!state) return;
+  renderPortfolio(state); renderNav(state); renderRankings(state);
+  renderPositions(state); renderActions(state); renderMetrics(state);
+}
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
