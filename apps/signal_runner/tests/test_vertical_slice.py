@@ -41,6 +41,19 @@ FIXED_CONTRACT_FIELDS = {
     "market-rules": "market_rules_sha256",
     "portfolio-risk": "portfolio_risk_sha256",
 }
+TEN_SESSION_LAG_CALENDAR = (
+    date(2026, 7, 29),
+    date(2026, 7, 30),
+    date(2026, 7, 31),
+    date(2026, 8, 3),
+    date(2026, 8, 4),
+    date(2026, 8, 5),
+    date(2026, 8, 6),
+    date(2026, 8, 7),
+    date(2026, 8, 10),
+    date(2026, 8, 11),
+    date(2026, 8, 12),
+)
 
 
 def load_json(path: Path) -> dict[str, object] | list[dict[str, object]]:
@@ -613,6 +626,37 @@ def test_stale_decision_data_holds_last_verified_target() -> None:
     assert result.production_signal["target_positions"] == previous["target_positions"]
     assert "DATASET_STALE" in result.production_signal["reason_codes"]
     assert "UNIVERSE_STALE" in result.production_signal["reason_codes"]
+
+
+def test_ten_session_stale_data_holds_verified_previous_target() -> None:
+    previous_run = build_fixture_run()
+    previous = previous_run.production_signal
+    assert previous["latest_complete_date"] == TEN_SESSION_LAG_CALENDAR[0].isoformat()
+    assert len(TEN_SESSION_LAG_CALENDAR[1:]) == 10
+
+    result = build_fixture_run(
+        as_of=TEN_SESSION_LAG_CALENDAR[-1],
+        generated_at=datetime(2026, 8, 12, 8, 10, tzinfo=UTC),
+        previous_run=previous_run,
+    )
+
+    assert result.production_signal["state"] == "HOLD"
+    assert result.production_signal["target_positions"] == previous["target_positions"]
+    assert result.production_signal["previous_signal_sha256"] == canonical_json_sha256(
+        previous
+    )
+    assert "DATASET_STALE" in result.production_signal["reason_codes"]
+    assert "UNIVERSE_STALE" in result.production_signal["reason_codes"]
+
+
+def test_ten_session_stale_data_without_previous_signal_fails_closed() -> None:
+    assert len(TEN_SESSION_LAG_CALENDAR[1:]) == 10
+
+    with pytest.raises(ValueError, match="HOLD requires a verified previous signal"):
+        build_fixture_run(
+            as_of=TEN_SESSION_LAG_CALENDAR[-1],
+            generated_at=datetime(2026, 8, 12, 8, 10, tzinfo=UTC),
+        )
 
 
 def test_degraded_run_without_previous_signal_fails_closed() -> None:

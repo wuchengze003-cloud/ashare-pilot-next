@@ -1,63 +1,81 @@
 {
-  "registry_version": "1.0.0",
+  "registry_version": "2.0.0",
   "contracts": [
     {
       "contract_id": "coverage-audit",
+      "schema_version": "1.0.0",
       "schema": "schemas/coverage-audit.schema.json",
       "examples": ["examples/coverage-audit.example.json"]
     },
     {
+      "contract_id": "coverage-audit",
+      "schema_version": "2.0.0",
+      "schema": "schemas/coverage-audit-v2.schema.json",
+      "examples": ["examples/coverage-audit-v2.example.json"]
+    },
+    {
       "contract_id": "dataset-manifest",
+      "schema_version": "2.0.0",
       "schema": "schemas/dataset-manifest.schema.json",
       "examples": ["examples/dataset-manifest.example.json"]
     },
     {
       "contract_id": "universe",
+      "schema_version": "2.0.0",
       "schema": "schemas/universe.schema.json",
       "examples": ["examples/universe.example.json"]
     },
     {
       "contract_id": "cost-model",
+      "schema_version": "2.0.0",
       "schema": "schemas/cost-model.schema.json",
       "examples": ["examples/cost-model.example.json"]
     },
     {
       "contract_id": "market-rules",
+      "schema_version": "1.0.0",
       "schema": "schemas/market-rules.schema.json",
       "examples": ["examples/market-rules.example.json"]
     },
     {
       "contract_id": "execution-policy",
+      "schema_version": "1.0.0",
       "schema": "schemas/execution-policy.schema.json",
       "examples": ["examples/execution-policy.example.json"]
     },
     {
       "contract_id": "portfolio-risk",
+      "schema_version": "1.0.0",
       "schema": "schemas/portfolio-risk.schema.json",
       "examples": ["examples/portfolio-risk.example.json"]
     },
     {
       "contract_id": "experiment-config",
+      "schema_version": "1.0.0",
       "schema": "schemas/experiment-config.schema.json",
       "examples": ["examples/experiment-config.example.json"]
     },
     {
       "contract_id": "promotion-gate",
+      "schema_version": "1.0.0",
       "schema": "schemas/promotion-gate.schema.json",
       "examples": ["examples/promotion-gate.example.json"]
     },
     {
       "contract_id": "champion",
+      "schema_version": "3.0.0",
       "schema": "schemas/champion.schema.json",
       "examples": ["examples/champion.example.json"]
     },
     {
       "contract_id": "strategy-adapter",
+      "schema_version": "1.0.0",
       "schema": "schemas/strategy-adapter.schema.json",
       "examples": ["examples/strategy-adapter.example.json"]
     },
     {
       "contract_id": "production-signal",
+      "schema_version": "4.0.0",
       "schema": "schemas/production-signal.schema.json",
       "examples": [
         "examples/production-signal.active.example.json",
@@ -68,16 +86,19 @@
     },
     {
       "contract_id": "signal-head",
+      "schema_version": "1.0.0",
       "schema": "schemas/signal-head.schema.json",
       "examples": ["examples/signal-head.example.json"]
     },
     {
       "contract_id": "runtime-manifest",
+      "schema_version": "1.0.0",
       "schema": "schemas/runtime-manifest.schema.json",
       "examples": ["examples/runtime-manifest.example.json"]
     },
     {
       "contract_id": "stage-health",
+      "schema_version": "1.0.0",
       "schema": "schemas/stage-health.schema.json",
       "examples": ["examples/stage-health.example.json"]
     }

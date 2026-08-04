@@ -2,6 +2,7 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from ashare_data_gateway import (
     SecurityLifecycle,
     UniverseMembership,
@@ -36,6 +37,7 @@ def audit(
     member_rows: tuple[UniverseMembership, ...] | None = None,
     lifecycle_rows: tuple[SecurityLifecycle, ...] | None = None,
     expected_member_count: int | None = 2,
+    provenance_warnings: tuple[str, ...] = (),
 ):
     return audit_historical_coverage(
         audit_id="fixture-coverage-20260720",
@@ -50,6 +52,7 @@ def audit(
         bar_keys=all_keys() if bar_keys is None else bar_keys,
         suspension_keys=suspension_keys,
         expected_member_count=expected_member_count,
+        provenance_warnings=provenance_warnings,
     )
 
 
@@ -59,8 +62,11 @@ def test_complete_member_day_coverage_passes() -> None:
     assert result.passed is True
     assert result.expected_member_days == 10
     assert result.bar_member_days == 10
+    assert result.expected_delisted_member_day_count == 0
+    assert result.expected_delisted_member_days == ()
     assert result.missing_member_days == ()
     assert result.silent_skip_symbols == ()
+    assert result.document["schema_version"] == "2.0.0"
 
 
 def test_missing_member_days_fail_without_silent_skip() -> None:
@@ -113,7 +119,90 @@ def test_delisted_member_expectation_stops_on_delist_date() -> None:
 
     assert result.passed is True
     assert result.expected_member_days == 8
+    assert result.expected_delisted_member_day_count == 0
     assert result.delisted_symbols_in_scope == ("000001.SZ",)
+
+
+def test_uncovered_delist_date_is_classified_once_and_passes() -> None:
+    lifecycle_rows = (
+        SecurityLifecycle("000001.SZ", date(2020, 1, 1), DAYS[2]),
+        SecurityLifecycle("600000.SH", date(2020, 1, 1), None),
+    )
+    bars = frozenset(
+        [("000001.SZ", trade_date) for trade_date in DAYS[:2]]
+        + [("600000.SH", trade_date) for trade_date in DAYS]
+    )
+
+    result = audit(
+        bar_keys=bars,
+        lifecycle_rows=lifecycle_rows,
+        expected_member_count=None,
+    )
+
+    assert result.passed is True
+    assert result.expected_member_days == 8
+    assert result.bar_member_days == 7
+    assert result.suspended_member_days == 0
+    assert result.expected_delisted_member_day_count == 1
+    assert [
+        (member_day.symbol, member_day.trade_date)
+        for member_day in result.expected_delisted_member_days
+    ] == [("000001.SZ", DAYS[2])]
+    assert result.missing_member_days == ()
+    assert result.silent_skip_symbols == ()
+    assert (
+        result.bar_member_days
+        + result.suspended_member_days
+        + result.expected_delisted_member_day_count
+        + len(result.missing_member_days)
+        == result.expected_member_days
+    )
+
+
+def test_bar_precedes_suspension_and_expected_delist_on_same_day() -> None:
+    lifecycle_rows = (
+        SecurityLifecycle("000001.SZ", date(2020, 1, 1), DAYS[2]),
+        SecurityLifecycle("600000.SH", date(2020, 1, 1), None),
+    )
+    bars = frozenset(
+        [("000001.SZ", trade_date) for trade_date in DAYS[:3]]
+        + [("600000.SH", trade_date) for trade_date in DAYS]
+    )
+
+    result = audit(
+        bar_keys=bars,
+        suspension_keys=frozenset({("000001.SZ", DAYS[2])}),
+        lifecycle_rows=lifecycle_rows,
+        expected_member_count=None,
+    )
+
+    assert result.passed is True
+    assert result.bar_member_days == 8
+    assert result.suspended_member_days == 0
+    assert result.expected_delisted_member_day_count == 0
+
+
+def test_filtered_suspension_precedes_expected_delist_on_same_day() -> None:
+    lifecycle_rows = (
+        SecurityLifecycle("000001.SZ", date(2020, 1, 1), DAYS[2]),
+        SecurityLifecycle("600000.SH", date(2020, 1, 1), None),
+    )
+    bars = frozenset(
+        [("000001.SZ", trade_date) for trade_date in DAYS[:2]]
+        + [("600000.SH", trade_date) for trade_date in DAYS]
+    )
+
+    result = audit(
+        bar_keys=bars,
+        suspension_keys=frozenset({("000001.SZ", DAYS[2])}),
+        lifecycle_rows=lifecycle_rows,
+        expected_member_count=None,
+    )
+
+    assert result.passed is True
+    assert result.bar_member_days == 7
+    assert result.suspended_member_days == 1
+    assert result.expected_delisted_member_day_count == 0
 
 
 def test_point_in_time_member_count_anomaly_fails() -> None:
@@ -129,15 +218,22 @@ def test_point_in_time_member_count_anomaly_fails() -> None:
 
 
 def test_coverage_document_is_deterministic_under_input_order() -> None:
-    first = audit()
+    first = audit(
+        provenance_warnings=(
+            "NON_OFFICIAL_VENDOR_ENDPOINT",
+            "NON_OFFICIAL_VENDOR_ENDPOINT",
+        )
+    )
     second = audit(
         member_rows=tuple(reversed(memberships())),
         lifecycle_rows=tuple(reversed(lifecycles())),
+        provenance_warnings=("NON_OFFICIAL_VENDOR_ENDPOINT",),
     )
 
     assert first.document == second.document
+    assert first.provenance_warnings == ("NON_OFFICIAL_VENDOR_ENDPOINT",)
     schema = json.loads(
-        (ROOT / "contracts/schemas/coverage-audit.schema.json").read_text(
+        (ROOT / "contracts/schemas/coverage-audit-v2.schema.json").read_text(
             encoding="utf-8"
         )
     )
@@ -145,3 +241,8 @@ def test_coverage_document_is_deterministic_under_input_order() -> None:
         schema,
         format_checker=FormatChecker(),
     ).validate(first.document)
+
+
+def test_invalid_provenance_warning_is_rejected() -> None:
+    with pytest.raises(ValueError, match="uppercase reason codes"):
+        audit(provenance_warnings=("non-official",))

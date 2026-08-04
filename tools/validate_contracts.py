@@ -26,6 +26,37 @@ def parse_datetime(value: str) -> datetime:
 
 
 def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -> None:
+    if contract_id == "coverage-audit" and document.get("schema_version") == "2.0.0":
+        expected_delisted = document["expected_delisted_member_days"]
+        expected_delisted_count = document["expected_delisted_member_day_count"]
+        if expected_delisted_count != len(expected_delisted):
+            raise ValueError(
+                f"{path}: expected-delisted count does not match member-day records"
+            )
+
+        classified_member_days = (
+            document["bar_member_days"]
+            + document["suspended_member_days"]
+            + expected_delisted_count
+            + len(document["missing_member_days"])
+        )
+        if classified_member_days != document["expected_member_days"]:
+            raise ValueError(
+                f"{path}: classified member-days do not reconcile to expected total"
+            )
+
+        expected_delisted_keys = {
+            (item["symbol"], item["trade_date"]) for item in expected_delisted
+        }
+        missing_keys = {
+            (item["symbol"], item["trade_date"])
+            for item in document["missing_member_days"]
+        }
+        if expected_delisted_keys & missing_keys:
+            raise ValueError(
+                f"{path}: member-day cannot be both expected-delisted and missing"
+            )
+
     if contract_id == "cost-model":
         source_ids = [source["source_id"] for source in document["sources"]]
         if len(source_ids) != len(set(source_ids)):
@@ -141,16 +172,20 @@ def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -
 
 def validate_registry() -> tuple[int, int]:
     registry = load_json(CONTRACTS / "registry.json")
-    contract_ids: set[str] = set()
+    contract_versions: set[tuple[str, str]] = set()
     schema_paths: set[Path] = set()
     schema_count = 0
     example_count = 0
 
     for entry in registry["contracts"]:
         contract_id = entry["contract_id"]
-        if contract_id in contract_ids:
-            raise ValueError(f"duplicate contract_id: {contract_id}")
-        contract_ids.add(contract_id)
+        schema_version = entry["schema_version"]
+        contract_version = (contract_id, schema_version)
+        if contract_version in contract_versions:
+            raise ValueError(
+                f"duplicate contract version: {contract_id} {schema_version}"
+            )
+        contract_versions.add(contract_version)
 
         schema_path = CONTRACTS / entry["schema"]
         if schema_path in schema_paths:
@@ -159,6 +194,14 @@ def validate_registry() -> tuple[int, int]:
 
         schema = load_json(schema_path)
         Draft202012Validator.check_schema(schema)
+        schema_contract_id = schema.get("properties", {}).get("contract_id", {}).get("const")
+        if schema_contract_id != contract_id:
+            raise ValueError(f"{schema_path}: contract_id does not match registry")
+        schema_contract_version = (
+            schema.get("properties", {}).get("schema_version", {}).get("const")
+        )
+        if schema_contract_version != schema_version:
+            raise ValueError(f"{schema_path}: schema_version does not match registry")
         validator = Draft202012Validator(schema, format_checker=FormatChecker())
         schema_count += 1
 
@@ -168,6 +211,8 @@ def validate_registry() -> tuple[int, int]:
             validator.validate(document)
             if document.get("contract_id") != contract_id:
                 raise ValueError(f"{example_path}: contract_id does not match registry")
+            if document.get("schema_version") != schema_version:
+                raise ValueError(f"{example_path}: schema_version does not match registry")
             validate_semantics(contract_id, document, example_path)
             example_count += 1
 

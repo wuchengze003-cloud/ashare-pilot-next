@@ -36,6 +36,19 @@
 - 可选的成员数量约束逐日执行，异常日期作为结构化证据输出。
 - 审计数字由当前输入实时生成，不接受旧报告数字作为通过依据。
 
+## Coverage Audit 2.0
+
+- 保留1.0 Schema和黄金样例不变；合同注册表以`contract_id + schema_version`
+  作为唯一身份，两个主版本可同时被审计。
+- 每个开市成员日只分类一次，顺序固定为行情、已过滤的
+  `suspend_type == "S"`停牌证据、当日退市、无解释缺失。复牌记录不得进入停牌键。
+- 退市日无行情和停牌证据时，输出一条`expected_delisted_member_days`记录；
+  退市日之后不再是预期成员日。
+- 分类数必须满足
+  `expected_member_days = bar_member_days + suspended_member_days + expected_delisted_member_day_count + len(missing_member_days)`。
+- `provenance_warnings`以结构化原因码保留数据来源告警。非官方供应商端点必须包含
+  `NON_OFFICIAL_VENDOR_ENDPOINT`；该告警本身不使覆盖审计失败。
+
 ## Universe 2.0
 
 - 每日Universe是点时成员快照，同时声明稳定的生成规则ID和版本。

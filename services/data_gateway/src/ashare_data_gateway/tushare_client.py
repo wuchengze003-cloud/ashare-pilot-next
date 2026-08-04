@@ -10,7 +10,10 @@ Design constraints:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
 import time
 from collections.abc import Callable
 from datetime import date
@@ -18,13 +21,17 @@ from datetime import date
 from .tushare_models import (
     AdjFactorRecord,
     DailyBarRecord,
+    StockBasicBatchResult,
     StockBasicRecord,
+    StockBasicRejection,
+    SuspendRecord,
     TradeCalRecord,
     validate_finite_float,
     validate_symbol,
     validate_trade_date,
 )
 from .tushare_transport import (
+    SecretToken,
     Transport,
     TransportRequest,
     TransportResponse,
@@ -36,6 +43,7 @@ DEFAULT_PAGE_SIZE = 5000
 MAX_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 1.0
 MAX_PAGES = 200
+_SAFE_VENDOR_CODE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 class TokenMissingError(Exception):
@@ -63,8 +71,53 @@ def _field_index(fields: tuple[str, ...], name: str, *, context: str) -> int:
         raise ValueError(f"{context}: missing expected field {name!r} in response") from None
 
 
+def _row_value(row: tuple[object, ...], index: int, *, context: str, field: str) -> object:
+    try:
+        return row[index]
+    except IndexError:
+        raise ValueError(f"{context}: row missing expected field {field!r}") from None
+
+
+def _require_string(
+    value: object, *, context: str, field: str, nonempty: bool = False
+) -> str:
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{context}: field {field} must be str, got {type(value).__name__}"
+        )
+    if nonempty and not value:
+        raise ValueError(f"{context}: field {field} cannot be empty")
+    return value
+
+
+def _nullable_reference_string(value: object, *, context: str, field: str) -> str:
+    """Preserve the accepted stock_basic null-to-empty reference semantics."""
+    if value is None:
+        return ""
+    return _require_string(value, context=context, field=field)
+
+
+def _safe_vendor_code(value: object) -> str | None:
+    if isinstance(value, str) and _SAFE_VENDOR_CODE.fullmatch(value):
+        return value
+    return None
+
+
+def _stock_basic_row_fingerprint(
+    fields: tuple[str, ...], row: tuple[object, ...]
+) -> str:
+    canonical = json.dumps(
+        {"fields": fields, "row": row},
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 class TushareClient:
-    """Read-only vendor access to four Tushare pro endpoints.
+    """Read-only vendor access to five Tushare pro endpoints.
 
     All methods are deterministic given the same transport responses.
     No system time is read; pagination and retry use injected sleep only.
@@ -116,14 +169,28 @@ class TushareClient:
     ) -> TransportResponse:
         """Fetch all pages and merge items. Fails on duplicate primary keys upstream.
 
-        Returns fields=requested fields and items=() for legitimate empty results.
-        Raises on: inconsistent fields, items-without-fields, max pages exceeded,
-        or identical consecutive pages (stuck offset).
+        Every page must return exactly the requested field set. Rows are reordered
+        into request-field order before merging so vendor field order cannot affect
+        the result. Raises on schema mismatch, max pages exceeded, or identical
+        consecutive pages (stuck offset).
         """
+        secret = SecretToken(token)
+        del token
+        if len(set(fields)) != len(fields):
+            raise ValueError(f"{api_name}: requested fields contain duplicates")
+        requested_field_set = frozenset(fields)
+
         all_items: list[tuple[object, ...]] = []
-        merged_fields: tuple[str, ...] = ()
         offset = 0
         prev_items: tuple[tuple[object, ...], ...] | None = None
+
+        begin_logical_call = getattr(self._transport, "begin_logical_call", None)
+        if callable(begin_logical_call):
+            try:
+                begin_logical_call(api_name)
+            except Exception:
+                del secret
+                raise
 
         for page_num in range(MAX_PAGES):
             request = TransportRequest(
@@ -133,35 +200,56 @@ class TushareClient:
                 offset=offset,
                 limit=self._page_size,
             )
+            begin_page = getattr(self._transport, "begin_page", None)
+            if callable(begin_page):
+                try:
+                    begin_page(request)
+                except Exception:
+                    del secret
+                    raise
             try:
-                response = self._send_with_retry(request, token=token)
+                response = self._send_with_retry(request, token=secret.reveal())
             except Exception:
-                del token  # keep token out of traceback frames
+                del secret
                 raise
 
-            # Field consistency validation
-            if response.fields:
-                if not merged_fields:
-                    merged_fields = response.fields
-                elif response.fields != merged_fields:
-                    raise ValueError(
-                        f"{api_name}: inconsistent fields across pages: "
-                        f"{merged_fields} vs {response.fields}"
-                    )
-            elif response.items:
+            # Validate each page independently, then normalize it to request order.
+            response_fields = response.fields
+            if len(set(response_fields)) != len(response_fields):
                 raise ValueError(
-                    f"{api_name}: page {page_num} has items but empty fields"
+                    f"{api_name}: page {page_num} has duplicate response fields: {response_fields}"
+                )
+            response_field_set = set(response_fields)
+            missing_fields = tuple(field for field in fields if field not in response_field_set)
+            extra_fields = tuple(
+                field for field in response_fields if field not in requested_field_set
+            )
+            if missing_fields or extra_fields:
+                raise ValueError(
+                    f"{api_name}: page {page_num} response fields do not match request: "
+                    f"missing={missing_fields}, extra={extra_fields}"
                 )
 
+            response_indexes = {field: index for index, field in enumerate(response_fields)}
+            normalized_items: list[tuple[object, ...]] = []
+            for row_num, row in enumerate(response.items):
+                if len(row) != len(response_fields):
+                    raise ValueError(
+                        f"{api_name}: page {page_num} row {row_num} has "
+                        f"{len(row)} values for {len(response_fields)} fields"
+                    )
+                normalized_items.append(tuple(row[response_indexes[field]] for field in fields))
+            page_items = tuple(normalized_items)
+
             # Detect stuck offset (vendor ignoring pagination)
-            if response.items and response.items == prev_items:
+            if page_items and page_items == prev_items:
                 raise ValueError(
                     f"{api_name}: identical response at page {page_num}; "
                     f"vendor may be ignoring offset parameter"
                 )
-            prev_items = response.items
+            prev_items = page_items
 
-            all_items.extend(response.items)
+            all_items.extend(page_items)
 
             if len(response.items) < self._page_size:
                 break
@@ -171,14 +259,10 @@ class TushareClient:
                 f"{api_name}: exceeded maximum page limit ({MAX_PAGES})"
             )
 
-        # Legitimate empty result: return requested fields with no items
-        if not merged_fields:
-            merged_fields = fields
-
         return TransportResponse(
             code=0,
             msg="",
-            fields=merged_fields,
+            fields=fields,
             items=tuple(all_items),
         )
 
@@ -229,8 +313,17 @@ class TushareClient:
             row_exchange = row[idx_exchange]
             if not isinstance(row_exchange, str) or not row_exchange:
                 raise ValueError(f"{context}: invalid exchange value: {row_exchange!r}")
+            if row_exchange != exchange:
+                raise ValueError(
+                    f"{context}: returned exchange {row_exchange!r} does not match "
+                    f"requested {exchange!r}"
+                )
 
             cal_date = validate_trade_date(row[idx_cal_date], context=context)
+            if cal_date < start_date or cal_date > end_date:
+                raise ValueError(
+                    f"{context}: returned date {cal_date.isoformat()} outside request window"
+                )
             key = (row_exchange, cal_date)
             if key in seen:
                 raise ValueError(f"{context}: duplicate primary key: {key}")
@@ -267,9 +360,32 @@ class TushareClient:
         *,
         list_status: str = "L",
     ) -> tuple[StockBasicRecord, ...]:
-        """Fetch security master list.
+        """Fetch a strict security master list.
 
-        Primary key: ts_code.
+        Any non-canonical vendor code causes the strict method to fail. Call
+        :meth:`fetch_stock_basic_reconciled` when structured rejection evidence
+        is required for the M1 L/D/P reconciliation.
+        """
+        batch = self.fetch_stock_basic_reconciled(list_status=list_status)
+        if batch.rejected:
+            safe_codes = tuple(rejection.vendor_ts_code for rejection in batch.rejected)
+            raise ValueError(
+                "stock_basic: rejected invalid vendor ts_code rows: "
+                f"count={len(batch.rejected)} codes={safe_codes!r}"
+            )
+        return batch.accepted
+
+    def fetch_stock_basic_reconciled(
+        self,
+        *,
+        list_status: str,
+    ) -> StockBasicBatchResult:
+        """Fetch one L/D/P batch with explicit invalid-code rejection evidence.
+
+        Only a non-canonical ``ts_code`` is rejectable. Every companion field,
+        requested-status binding, date relationship, and duplicate key remains
+        fail-closed. The returned counts always satisfy
+        ``raw_row_count == len(accepted) + len(rejected)``.
         """
         if list_status not in ("L", "D", "P"):
             raise ValueError(f"stock_basic: invalid list_status filter: {list_status!r}")
@@ -305,46 +421,110 @@ class TushareClient:
         idx_delist_date = _field_index(response.fields, "delist_date", context=context)
         idx_list_status = _field_index(response.fields, "list_status", context=context)
 
-        seen: set[str] = set()
-        records: list[StockBasicRecord] = []
+        seen_vendor_codes: set[str] = set()
+        accepted: list[StockBasicRecord] = []
+        rejected: list[StockBasicRejection] = []
 
         for row in response.items:
-            ts_code = validate_symbol(row[idx_ts_code], context=context)
-            if ts_code in seen:
-                raise ValueError(f"{context}: duplicate primary key: {ts_code}")
-            seen.add(ts_code)
+            raw_ts_code = _row_value(
+                row, idx_ts_code, context=context, field="ts_code"
+            )
+            symbol_raw = _require_string(
+                _row_value(row, idx_symbol, context=context, field="symbol"),
+                context=context,
+                field="symbol",
+                nonempty=True,
+            )
+            name_raw = _require_string(
+                _row_value(row, idx_name, context=context, field="name"),
+                context=context,
+                field="name",
+                nonempty=True,
+            )
+            area = _nullable_reference_string(
+                _row_value(row, idx_area, context=context, field="area"),
+                context=context,
+                field="area",
+            )
+            industry = _nullable_reference_string(
+                _row_value(row, idx_industry, context=context, field="industry"),
+                context=context,
+                field="industry",
+            )
+            market = _nullable_reference_string(
+                _row_value(row, idx_market, context=context, field="market"),
+                context=context,
+                field="market",
+            )
 
-            symbol_raw = row[idx_symbol]
-            if not isinstance(symbol_raw, str) or not symbol_raw:
-                raise ValueError(f"{context}: invalid symbol: {symbol_raw!r}")
+            list_date_raw = _row_value(
+                row, idx_list_date, context=context, field="list_date"
+            )
+            list_date: date | None = None
+            if list_date_raw is not None and list_date_raw != "":
+                list_date = validate_trade_date(list_date_raw, context=context)
+
+            delist_date_raw = _row_value(
+                row, idx_delist_date, context=context, field="delist_date"
+            )
+            delist_date: date | None = None
+            if delist_date_raw is not None and delist_date_raw != "":
+                delist_date = validate_trade_date(delist_date_raw, context=context)
+
+            status_raw = _require_string(
+                _row_value(row, idx_list_status, context=context, field="list_status"),
+                context=context,
+                field="list_status",
+                nonempty=True,
+            )
+            if status_raw != list_status:
+                raise ValueError(
+                    f"{context}: returned list_status {status_raw!r} does not match "
+                    f"requested {list_status!r}"
+                )
+            if (
+                delist_date is not None
+                and list_date is not None
+                and delist_date < list_date
+            ):
+                raise ValueError(f"{context}: delist_date cannot precede list_date")
+
+            if isinstance(raw_ts_code, str):
+                if raw_ts_code in seen_vendor_codes:
+                    raise ValueError(
+                        f"{context}: duplicate primary key/vendor ts_code: "
+                        f"{_safe_vendor_code(raw_ts_code)!r}"
+                    )
+                seen_vendor_codes.add(raw_ts_code)
+                if "." in raw_ts_code and symbol_raw != raw_ts_code.rsplit(".", 1)[0]:
+                    raise ValueError(
+                        f"{context}: vendor ts_code/symbol mismatch: "
+                        f"{_safe_vendor_code(raw_ts_code)!r} vs {symbol_raw!r}"
+                    )
+            else:
+                # A wrong JSON type is schema corruption, not a vendor-code
+                # exception that may be reconciled into rejection evidence.
+                validate_symbol(raw_ts_code, context=context)
+
+            try:
+                ts_code = validate_symbol(raw_ts_code, context=context)
+            except ValueError:
+                rejected.append(
+                    StockBasicRejection(
+                        list_status=list_status,
+                        reason="INVALID_VENDOR_TS_CODE",
+                        row_fingerprint=_stock_basic_row_fingerprint(response.fields, row),
+                        vendor_ts_code=_safe_vendor_code(raw_ts_code),
+                    )
+                )
+                continue
+
             if symbol_raw != ts_code.split(".")[0]:
                 raise ValueError(
                     f"{context}: ts_code/symbol mismatch: {ts_code} vs {symbol_raw!r}"
                 )
 
-            name_raw = row[idx_name]
-            if not isinstance(name_raw, str) or not name_raw:
-                raise ValueError(f"{context}: invalid name: {name_raw!r}")
-
-            area = row[idx_area] if isinstance(row[idx_area], str) else ""
-            industry = row[idx_industry] if isinstance(row[idx_industry], str) else ""
-            market = row[idx_market] if isinstance(row[idx_market], str) else ""
-
-            list_date_raw = row[idx_list_date]
-            list_date: date | None = None
-            if list_date_raw is not None and list_date_raw != "":
-                list_date = validate_trade_date(list_date_raw, context=context)
-
-            delist_date_raw = row[idx_delist_date]
-            delist_date: date | None = None
-            if delist_date_raw is not None and delist_date_raw != "":
-                delist_date = validate_trade_date(delist_date_raw, context=context)
-
-            status_raw = row[idx_list_status]
-            if not isinstance(status_raw, str) or not status_raw:
-                raise ValueError(f"{context}: invalid list_status: {status_raw!r}")
-
-            records.append(
+            accepted.append(
                 StockBasicRecord(
                     ts_code=ts_code,
                     symbol=symbol_raw,
@@ -358,7 +538,12 @@ class TushareClient:
                 )
             )
 
-        return tuple(records)
+        return StockBasicBatchResult(
+            list_status=list_status,
+            raw_row_count=len(response.items),
+            accepted=tuple(accepted),
+            rejected=tuple(rejected),
+        )
 
     # ------------------------------------------------------------------
     # daily
@@ -418,7 +603,16 @@ class TushareClient:
 
         for row in response.items:
             row_code = validate_symbol(row[idx_ts_code], context=context)
+            if row_code != ts_code:
+                raise ValueError(
+                    f"{context}: returned symbol {row_code!r} does not match "
+                    f"requested {ts_code!r}"
+                )
             trade_date = validate_trade_date(row[idx_trade_date], context=context)
+            if trade_date < start_date or trade_date > end_date:
+                raise ValueError(
+                    f"{context}: returned date {trade_date.isoformat()} outside request window"
+                )
             key = (row_code, trade_date)
             if key in seen:
                 raise ValueError(f"{context}: duplicate primary key: {key}")
@@ -434,6 +628,116 @@ class TushareClient:
                     close=validate_finite_float(row[idx_close], context=context, field="close"),
                     vol=validate_finite_float(row[idx_vol], context=context, field="vol"),
                     amount=validate_finite_float(row[idx_amount], context=context, field="amount"),
+                )
+            )
+
+        return tuple(records)
+
+    # ------------------------------------------------------------------
+    # suspend_d
+    # ------------------------------------------------------------------
+
+    def fetch_suspend_d(
+        self,
+        *,
+        ts_codes: tuple[str, ...],
+        start_date: date,
+        end_date: date,
+    ) -> tuple[SuspendRecord, ...]:
+        """Fetch suspension and resumption evidence for explicit symbols/window.
+
+        Tushare accepts multiple comma-separated symbols. Inputs are validated,
+        deduplicated, and sorted before the request. No ``suspend_type`` filter
+        is sent, so both ``S`` and ``R`` records remain available to downstream
+        diagnostics; coverage may use only ``S``.
+
+        Primary key: (ts_code, trade_date, suspend_type).
+        """
+        if not isinstance(ts_codes, tuple):
+            raise ValueError("suspend_d: ts_codes must be a tuple")
+        if not ts_codes:
+            raise ValueError("suspend_d: ts_codes cannot be empty")
+        requested_codes = tuple(
+            sorted({validate_symbol(code, context="suspend_d") for code in ts_codes})
+        )
+        if end_date < start_date:
+            raise ValueError("suspend_d: end_date cannot precede start_date")
+
+        fields = ("ts_code", "trade_date", "suspend_timing", "suspend_type")
+        params = (
+            ("ts_code", ",".join(requested_codes)),
+            ("start_date", _format_date(start_date)),
+            ("end_date", _format_date(end_date)),
+        )
+        response = self._fetch_all_pages(
+            api_name="suspend_d",
+            params=params,
+            fields=fields,
+            token=_read_token(),
+        )
+
+        context = "suspend_d"
+        idx_ts_code = _field_index(response.fields, "ts_code", context=context)
+        idx_trade_date = _field_index(response.fields, "trade_date", context=context)
+        idx_suspend_timing = _field_index(
+            response.fields, "suspend_timing", context=context
+        )
+        idx_suspend_type = _field_index(
+            response.fields, "suspend_type", context=context
+        )
+
+        requested_set = frozenset(requested_codes)
+        seen: set[tuple[str, date, str]] = set()
+        records: list[SuspendRecord] = []
+        for row in response.items:
+            row_code = validate_symbol(
+                _row_value(row, idx_ts_code, context=context, field="ts_code"),
+                context=context,
+            )
+            if row_code not in requested_set:
+                raise ValueError(
+                    f"{context}: returned symbol {row_code!r} was not requested"
+                )
+
+            trade_date = validate_trade_date(
+                _row_value(row, idx_trade_date, context=context, field="trade_date"),
+                context=context,
+            )
+            if trade_date < start_date or trade_date > end_date:
+                raise ValueError(
+                    f"{context}: returned date {trade_date.isoformat()} outside request window"
+                )
+
+            timing_raw = _row_value(
+                row, idx_suspend_timing, context=context, field="suspend_timing"
+            )
+            if timing_raw is not None and not isinstance(timing_raw, str):
+                raise ValueError(
+                    f"{context}: suspend_timing must be str or None, "
+                    f"got {type(timing_raw).__name__}"
+                )
+
+            suspend_type = _require_string(
+                _row_value(row, idx_suspend_type, context=context, field="suspend_type"),
+                context=context,
+                field="suspend_type",
+                nonempty=True,
+            )
+            if suspend_type not in ("S", "R"):
+                raise ValueError(
+                    f"{context}: suspend_type must be 'S' or 'R', got {suspend_type!r}"
+                )
+
+            key = (row_code, trade_date, suspend_type)
+            if key in seen:
+                raise ValueError(f"{context}: duplicate primary key: {key}")
+            seen.add(key)
+            records.append(
+                SuspendRecord(
+                    ts_code=row_code,
+                    trade_date=trade_date,
+                    suspend_timing=timing_raw,
+                    suspend_type=suspend_type,
                 )
             )
 
@@ -483,7 +787,16 @@ class TushareClient:
 
         for row in response.items:
             row_code = validate_symbol(row[idx_ts_code], context=context)
+            if row_code != ts_code:
+                raise ValueError(
+                    f"{context}: returned symbol {row_code!r} does not match "
+                    f"requested {ts_code!r}"
+                )
             trade_date = validate_trade_date(row[idx_trade_date], context=context)
+            if trade_date < start_date or trade_date > end_date:
+                raise ValueError(
+                    f"{context}: returned date {trade_date.isoformat()} outside request window"
+                )
             key = (row_code, trade_date)
             if key in seen:
                 raise ValueError(f"{context}: duplicate primary key: {key}")

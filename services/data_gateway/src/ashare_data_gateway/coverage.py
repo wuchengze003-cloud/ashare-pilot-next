@@ -74,10 +74,13 @@ class CoverageAudit:
     expected_member_days: int
     bar_member_days: int
     suspended_member_days: int
+    expected_delisted_member_day_count: int
+    expected_delisted_member_days: tuple[CoverageGap, ...]
     missing_member_days: tuple[CoverageGap, ...]
     silent_skip_symbols: tuple[str, ...]
     delisted_symbols_in_scope: tuple[str, ...]
     member_count_anomalies: tuple[MemberCountAnomaly, ...]
+    provenance_warnings: tuple[str, ...]
     passed: bool
     reason_codes: tuple[str, ...]
 
@@ -85,7 +88,7 @@ class CoverageAudit:
     def document(self) -> dict[str, object]:
         return {
             "contract_id": "coverage-audit",
-            "schema_version": "1.0.0",
+            "schema_version": "2.0.0",
             "audit_id": self.audit_id,
             "universe_policy_id": self.universe_policy_id,
             "universe_policy_version": self.universe_policy_version,
@@ -99,6 +102,16 @@ class CoverageAudit:
             "expected_member_days": self.expected_member_days,
             "bar_member_days": self.bar_member_days,
             "suspended_member_days": self.suspended_member_days,
+            "expected_delisted_member_day_count": (
+                self.expected_delisted_member_day_count
+            ),
+            "expected_delisted_member_days": [
+                {
+                    **asdict(member_day),
+                    "trade_date": member_day.trade_date.isoformat(),
+                }
+                for member_day in self.expected_delisted_member_days
+            ],
             "missing_member_days": [
                 {
                     **asdict(gap),
@@ -115,6 +128,7 @@ class CoverageAudit:
                 }
                 for anomaly in self.member_count_anomalies
             ],
+            "provenance_warnings": list(self.provenance_warnings),
             "passed": self.passed,
             "reason_codes": list(self.reason_codes),
         }
@@ -150,8 +164,14 @@ def audit_historical_coverage(
     bar_keys: frozenset[tuple[str, date]],
     suspension_keys: frozenset[tuple[str, date]],
     expected_member_count: int | None,
+    provenance_warnings: tuple[str, ...] = (),
 ) -> CoverageAudit:
-    """Audit every expected historical member-day without silently skipping symbols."""
+    """Audit every expected historical member-day without silently skipping symbols.
+
+    ``suspension_keys`` must contain only supplier records already verified as
+    ``suspend_type == "S"``. A member-day is classified exactly once, in bar,
+    suspension, expected-delist, then missing precedence order.
+    """
     if not audit_id or not universe_policy_id or not universe_policy_version:
         raise ValueError("audit and universe policy identities cannot be empty")
     if window_end < window_start:
@@ -195,6 +215,10 @@ def audit_historical_coverage(
         if trade_date < window_start or trade_date > window_end:
             raise ValueError("availability key is outside the audit window")
 
+    for warning in provenance_warnings:
+        if not warning or not re.fullmatch(r"[A-Z0-9_]+", warning):
+            raise ValueError("provenance warnings must be uppercase reason codes")
+
     expected_keys: set[tuple[str, date]] = set()
     anomalies: list[MemberCountAnomaly] = []
     for trade_date in ordered_days:
@@ -215,17 +239,28 @@ def audit_historical_coverage(
 
     covered_by_bar = expected_keys & bar_keys
     covered_by_suspension = (expected_keys - covered_by_bar) & suspension_keys
+    remaining_keys = expected_keys - covered_by_bar - covered_by_suspension
+    covered_by_expected_delist = {
+        (symbol, trade_date)
+        for symbol, trade_date in remaining_keys
+        if lifecycle_by_symbol[symbol].delisted_on == trade_date
+    }
     missing = tuple(
         CoverageGap(symbol=symbol, trade_date=trade_date)
         for symbol, trade_date in sorted(
-            expected_keys - covered_by_bar - covered_by_suspension
+            remaining_keys - covered_by_expected_delist
         )
+    )
+    expected_delisted = tuple(
+        CoverageGap(symbol=symbol, trade_date=trade_date)
+        for symbol, trade_date in sorted(covered_by_expected_delist)
     )
     expected_symbols = {symbol for symbol, _ in expected_keys}
     observed_symbols = {
         symbol
-        for symbol, trade_date in bar_keys | suspension_keys
-        if (symbol, trade_date) in expected_keys
+        for symbol, _trade_date in (
+            covered_by_bar | covered_by_suspension | covered_by_expected_delist
+        )
     }
     silent_skips = tuple(sorted(expected_symbols - observed_symbols))
     delisted_in_scope = tuple(
@@ -257,10 +292,13 @@ def audit_historical_coverage(
         expected_member_days=len(expected_keys),
         bar_member_days=len(covered_by_bar),
         suspended_member_days=len(covered_by_suspension),
+        expected_delisted_member_day_count=len(covered_by_expected_delist),
+        expected_delisted_member_days=expected_delisted,
         missing_member_days=missing,
         silent_skip_symbols=silent_skips,
         delisted_symbols_in_scope=delisted_in_scope,
         member_count_anomalies=tuple(anomalies),
+        provenance_warnings=tuple(sorted(set(provenance_warnings))),
         passed=not reason_codes,
         reason_codes=reason_codes,
     )

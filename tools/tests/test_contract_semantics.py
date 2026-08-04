@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.validate_contracts import validate_semantics
+from tools.validate_contracts import validate_registry, validate_semantics
 
 DOCUMENT = Path("synthetic-document.json")
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +13,14 @@ ROOT = Path(__file__).resolve().parents[2]
 def cost_model() -> dict[str, object]:
     return json.loads(
         (ROOT / "contracts/examples/cost-model.example.json").read_text(encoding="utf-8")
+    )
+
+
+def coverage_audit_v2() -> dict[str, object]:
+    return json.loads(
+        (ROOT / "contracts/examples/coverage-audit-v2.example.json").read_text(
+            encoding="utf-8"
+        )
     )
 
 
@@ -147,3 +155,33 @@ def test_cost_model_rejects_closed_final_segment() -> None:
 
     with pytest.raises(ValueError, match="must be open-ended"):
         validate_semantics("cost-model", closed_model, DOCUMENT)
+
+
+def test_coverage_v2_expected_delisted_count_must_match_records() -> None:
+    document = coverage_audit_v2()
+    document["expected_delisted_member_day_count"] = 0
+
+    with pytest.raises(ValueError, match="expected-delisted count"):
+        validate_semantics("coverage-audit", document, DOCUMENT)
+
+
+def test_coverage_v2_classifications_must_reconcile() -> None:
+    document = coverage_audit_v2()
+    document["bar_member_days"] = 1
+
+    with pytest.raises(ValueError, match="do not reconcile"):
+        validate_semantics("coverage-audit", document, DOCUMENT)
+
+
+def test_registry_accepts_both_coverage_audit_major_versions() -> None:
+    validate_registry()
+    registry = json.loads(
+        (ROOT / "contracts/registry.json").read_text(encoding="utf-8")
+    )
+
+    versions = sorted(
+        entry["schema_version"]
+        for entry in registry["contracts"]
+        if entry["contract_id"] == "coverage-audit"
+    )
+    assert versions == ["1.0.0", "2.0.0"]

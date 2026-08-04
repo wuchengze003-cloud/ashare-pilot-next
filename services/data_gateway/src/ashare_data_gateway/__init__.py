@@ -1,5 +1,13 @@
 """Provider ingestion and immutable dataset publication boundary."""
 
+from .acquisition import (
+    NON_OFFICIAL_VENDOR_WARNING,
+    AcquisitionTelemetry,
+    ApiAcquisitionTelemetry,
+    CountingTransport,
+    RawResponseSnapshot,
+    RequestEvidence,
+)
 from .coverage import (
     CoverageAudit,
     CoverageGap,
@@ -8,12 +16,35 @@ from .coverage import (
     UniverseMembership,
     audit_historical_coverage,
 )
+from .dataset_publication import (
+    AuxiliaryArtifact,
+    DatasetSourceIdentity,
+    LoadedNormalizedDataset,
+    PreparedNormalizedDataset,
+    PublishedDatasetPaths,
+    load_published_auxiliary_artifacts,
+    load_published_dataset,
+    prepare_normalized_dataset,
+    publish_normalized_dataset,
+    source_identity_from_base_url,
+    validate_prepared_dataset,
+)
 from .freshness import FreshnessAssessment, assess_dataset_freshness
+from .normalization import (
+    NormalizationError,
+    NormalizedDailyBar,
+    canonical_daily_bar_bytes,
+    canonical_json_bytes,
+    normalize_daily_bars,
+)
 from .tushare_client import TokenMissingError, TushareClient
 from .tushare_models import (
     AdjFactorRecord,
     DailyBarRecord,
+    StockBasicBatchResult,
     StockBasicRecord,
+    StockBasicRejection,
+    SuspendRecord,
     TradeCalRecord,
 )
 from .tushare_transport import (
@@ -30,15 +61,31 @@ from .tushare_transport import (
 
 __all__ = [
     "AdjFactorRecord",
+    "AcquisitionTelemetry",
+    "ApiAcquisitionTelemetry",
+    "AuxiliaryArtifact",
+    "CountingTransport",
     "CoverageAudit",
     "CoverageGap",
     "DailyBarRecord",
+    "DatasetSourceIdentity",
     "FreshnessAssessment",
     "HttpJsonTransport",
+    "LoadedNormalizedDataset",
     "MemberCountAnomaly",
+    "NON_OFFICIAL_VENDOR_WARNING",
+    "NormalizationError",
+    "NormalizedDailyBar",
+    "PreparedNormalizedDataset",
+    "PublishedDatasetPaths",
+    "RawResponseSnapshot",
+    "RequestEvidence",
     "SecretToken",
     "SecurityLifecycle",
+    "StockBasicBatchResult",
     "StockBasicRecord",
+    "StockBasicRejection",
+    "SuspendRecord",
     "TokenMissingError",
     "TradeCalRecord",
     "Transport",
@@ -51,5 +98,14 @@ __all__ = [
     "UniverseMembership",
     "assess_dataset_freshness",
     "audit_historical_coverage",
+    "canonical_daily_bar_bytes",
+    "canonical_json_bytes",
+    "load_published_auxiliary_artifacts",
+    "load_published_dataset",
+    "normalize_daily_bars",
+    "prepare_normalized_dataset",
+    "publish_normalized_dataset",
     "resolve_base_url",
+    "source_identity_from_base_url",
+    "validate_prepared_dataset",
 ]

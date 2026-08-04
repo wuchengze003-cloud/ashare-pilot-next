@@ -19,6 +19,8 @@ from datetime import date
 
 SYMBOL_PATTERN = re.compile(r"^[0-9]{6}\.(SZ|SH|BJ)$")
 DATE_PATTERN = re.compile(r"^[0-9]{8}$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SAFE_VENDOR_CODE_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def validate_symbol(value: object, *, context: str) -> str:
@@ -109,6 +111,61 @@ class StockBasicRecord:
 
 
 @dataclass(frozen=True, order=True)
+class StockBasicRejection:
+    """One non-canonical vendor security code rejected from ``stock_basic``.
+
+    The full vendor row is intentionally not retained here. ``row_fingerprint``
+    binds the rejection to the raw row without copying vendor data into audit
+    evidence, while ``vendor_ts_code`` is present only when it is safe to expose.
+    """
+
+    list_status: str
+    reason: str
+    row_fingerprint: str
+    vendor_ts_code: str | None
+
+    def __post_init__(self) -> None:
+        if self.list_status not in ("L", "D", "P"):
+            raise ValueError(
+                f"stock_basic rejection: invalid list_status: {self.list_status!r}"
+            )
+        if self.reason != "INVALID_VENDOR_TS_CODE":
+            raise ValueError(f"stock_basic rejection: invalid reason: {self.reason!r}")
+        if not SHA256_PATTERN.fullmatch(self.row_fingerprint):
+            raise ValueError("stock_basic rejection: row_fingerprint must be sha256 hex")
+        if self.vendor_ts_code is not None and not SAFE_VENDOR_CODE_PATTERN.fullmatch(
+            self.vendor_ts_code
+        ):
+            raise ValueError("stock_basic rejection: vendor_ts_code is not safe evidence")
+
+
+@dataclass(frozen=True)
+class StockBasicBatchResult:
+    """Reconciled result for one explicit ``stock_basic`` list status."""
+
+    list_status: str
+    raw_row_count: int
+    accepted: tuple[StockBasicRecord, ...]
+    rejected: tuple[StockBasicRejection, ...]
+
+    def __post_init__(self) -> None:
+        if self.list_status not in ("L", "D", "P"):
+            raise ValueError(f"stock_basic batch: invalid list_status: {self.list_status!r}")
+        if self.raw_row_count < 0:
+            raise ValueError("stock_basic batch: raw_row_count cannot be negative")
+        if not isinstance(self.accepted, tuple) or not isinstance(self.rejected, tuple):
+            raise ValueError("stock_basic batch: accepted and rejected must be tuples")
+        if self.raw_row_count != len(self.accepted) + len(self.rejected):
+            raise ValueError(
+                "stock_basic batch: raw_row_count must equal accepted + rejected"
+            )
+        if any(record.list_status != self.list_status for record in self.accepted):
+            raise ValueError("stock_basic batch: accepted record status mismatch")
+        if any(record.list_status != self.list_status for record in self.rejected):
+            raise ValueError("stock_basic batch: rejected record status mismatch")
+
+
+@dataclass(frozen=True, order=True)
 class DailyBarRecord:
     """One unadjusted daily bar.
 
@@ -149,3 +206,26 @@ class AdjFactorRecord:
         validate_symbol(self.ts_code, context="adj_factor")
         if self.adj_factor <= 0:
             raise ValueError(f"adj_factor: must be positive, got {self.adj_factor}")
+
+
+@dataclass(frozen=True, order=True)
+class SuspendRecord:
+    """One daily suspension or resumption record from ``suspend_d``.
+
+    Both ``S`` (suspension) and ``R`` (resumption) are retained. Coverage may
+    use only ``S`` as evidence for an otherwise missing daily bar.
+    """
+
+    ts_code: str
+    trade_date: date
+    suspend_timing: str | None
+    suspend_type: str
+
+    def __post_init__(self) -> None:
+        validate_symbol(self.ts_code, context="suspend_d")
+        if self.suspend_timing is not None and not isinstance(self.suspend_timing, str):
+            raise ValueError("suspend_d: suspend_timing must be str or None")
+        if self.suspend_type not in ("S", "R"):
+            raise ValueError(
+                f"suspend_d: suspend_type must be 'S' or 'R', got {self.suspend_type!r}"
+            )
