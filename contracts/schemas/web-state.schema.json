@@ -88,6 +88,7 @@
           "items": {"type": "string", "minLength": 1, "maxLength": 60}
         },
         "validation_ic_mean": {"type": "number"},
+        "production_training_cutoff": {"type": "string", "format": "date"},
         "signal_sequence": {"type": "integer", "minimum": 0},
         "signal_state": {
           "enum": ["ACTIVE", "HOLD", "REDUCE_ONLY", "FLAT", "UNAVAILABLE"]
@@ -105,7 +106,7 @@
           "rank",
           "score",
           "recommendation",
-          "confidence",
+          "rank_strength",
           "price_band",
           "factors",
           "risk_notes"
@@ -115,7 +116,7 @@
           "rank": {"type": "integer", "minimum": 1},
           "score": {"type": "number"},
           "recommendation": {"enum": ["BUY", "HOLD", "SELL", "WATCH"]},
-          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "rank_strength": {"type": "number", "minimum": 0, "maximum": 1},
           "price_band": {
             "type": ["object", "null"],
             "additionalProperties": false,

@@ -52,6 +52,7 @@
 <body>
 <header>
   <h1>A股机器学习选股驾驶舱</h1>
+  <span class="pill bad">日线数据 ML 试点 / 历史回放 · 非实时盘中行情</span>
   <span class="pill" id="market-status">市场状态：加载中</span>
   <span class="pill" id="data-time">数据时间：加载中</span>
   <span class="pill" id="model-info">模型：加载中</span>
@@ -73,7 +74,7 @@
     <div class="scroll"><table id="rankings"></table></div>
   </section>
   <section>
-    <h2>当前模拟持仓（T+1：锁定股数当日不可卖）</h2>
+    <h2>样本外回测末日组合（历史回放 · 非持久化模拟账户）</h2>
     <div class="scroll"><table id="positions"></table></div>
   </section>
   <section>
@@ -167,7 +168,8 @@ function renderNav(state) {
 
 function renderRankings(state) {
   const head = `<tr><th>#</th><th>代码</th><th class="num">评分</th><th>建议</th>` +
-    `<th class="num">置信度</th><th class="num">建议买入区间</th><th>主要影响因素</th><th>风险提示</th></tr>`;
+    `<th class="num">排名强度</th><th class="num">建议买入区间</th>` +
+    `<th>全局因素关联度（横截面·非个股归因）</th><th>风险提示</th></tr>`;
   const rows = state.rankings.map((item) => {
     const band = item.price_band
       ? `${item.price_band.low.toFixed(2)} – ${item.price_band.high.toFixed(2)}` : "—";
@@ -176,7 +178,7 @@ function renderRankings(state) {
     return `<tr><td>${item.rank}</td><td>${item.symbol}</td>` +
       `<td class="num">${fmtNum(item.score)}</td>` +
       `<td class="rec-${item.recommendation}">${item.recommendation}</td>` +
-      `<td class="num">${(item.confidence * 100).toFixed(1)}%</td>` +
+      `<td class="num">${(item.rank_strength * 100).toFixed(1)}%</td>` +
       `<td class="num">${band}</td>` +
       `<td class="factors">${factors || "—"}</td>` +
       `<td class="notes">${item.risk_notes.join("；") || "—"}</td></tr>`;
@@ -217,7 +219,7 @@ function renderMetrics(state) {
     ["基准总收益", fmtPct(m.benchmark_total_return), m.benchmark_total_return >= 0],
     ["最大回撤", fmtPct(m.max_drawdown), false],
     ["日胜率", fmtPct(m.win_rate), m.win_rate >= 0.5],
-    ["换手率", fmtNum(m.turnover), true],
+    ["平均日换手", fmtNum(m.turnover), true],
     ["验证集 IC", fmtNum(model.validation_ic_mean), model.validation_ic_mean > 0],
   ];
   $("metric-cards").innerHTML = cards.map(([label, value, good]) =>
@@ -231,9 +233,9 @@ function renderMetrics(state) {
   $("leak-checks").innerHTML = head + rows;
   const s = state.performance.splits;
   $("split-info").textContent =
-    `样本划分：样本内 ${s.in_sample} ｜ 验证集 ${s.validation} ｜ 样本外 ${s.out_of_sample} · ` +
-    `训练截止 ${model.training_cutoff} · 回测区间 ${model.backtest_window.start} → ${model.backtest_window.end} · ` +
-    `数据集 ${model.dataset_id}`;
+    `样本划分：样本内 ≤ ${s.in_sample.split("/")[1]} ｜ 验证集 ${s.validation} ｜ 样本外 ${s.out_of_sample} · ` +
+    `评估模型训练截止 ${model.training_cutoff} · 生产模型训练截止 ${model.production_training_cutoff} · ` +
+    `固定切分顺序回测（无滚动重训） · 数据集 ${model.dataset_id}`;
 }
 
 async function refresh() {

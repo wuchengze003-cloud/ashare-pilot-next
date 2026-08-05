@@ -83,7 +83,7 @@ def build_web_state(
                 "rank": item["rank"],
                 "score": item["score"],
                 "recommendation": item["recommendation"],
-                "confidence": item["confidence"],
+                "rank_strength": item["rank_strength"],
                 "price_band": item["price_band"],
                 "factors": [dict(factor) for factor in research_report["feature_weights"]],
                 "risk_notes": list(item["risk_notes"]),
@@ -135,6 +135,7 @@ def build_web_state(
             "strategy_version": str(champion["strategy_version"]),
             "adapter_sha256": str(champion["adapter_sha256"]),
             "training_cutoff": research_report["training_cutoff"],
+            "production_training_cutoff": research_report["production_training_cutoff"],
             "validation_cutoff": research_report["validation_cutoff"],
             "backtest_window": {
                 "start": research_report["test_start"],

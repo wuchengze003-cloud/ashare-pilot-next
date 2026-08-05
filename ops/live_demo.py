@@ -109,7 +109,25 @@ def run_cycle(args, runtime_pilot: Path, runtime_web: Path) -> bool:
     stamp = generated_at.strftime("%Y%m%dT%H%M%S")
     python = sys.executable
 
-    if args.mode == "live":
+    if args.mode == "synthetic":
+        synthetic = _run(
+            [
+                python,
+                "-m",
+                "ashare_research_app.synthetic_demo",
+                "--out-dir",
+                str(runtime_pilot / "synthetic"),
+            ]
+        )
+        if synthetic.returncode != 0 or not synthetic.stdout.strip():
+            _fail(runtime_web, "SYNTHETIC_FAILED", synthetic.stderr[-500:])
+            return False
+        generated = json.loads(synthetic.stdout)
+        manifest_path = Path(str(generated["manifest_path"]))
+        dataset_root = Path(str(generated["dataset_dir"]))
+        is_official = False
+        mode = "synthetic"
+    elif args.mode == "live":
         symbols = args.symbols
         window_end = datetime.now(CN_TZ).date()
         window_start = window_end - timedelta(days=args.lookback_days)
@@ -252,7 +270,11 @@ def run_cycle(args, runtime_pilot: Path, runtime_web: Path) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the ML live pilot demo")
-    parser.add_argument("--mode", choices=["m1-replay", "live"], default="m1-replay")
+    parser.add_argument(
+        "--mode",
+        choices=["synthetic", "m1-replay", "live"],
+        default="synthetic",
+    )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--refresh-seconds", type=int, default=300)
@@ -265,7 +287,7 @@ def main() -> int:
         default=(
             "000001.SZ,000333.SZ,000858.SZ,002415.SZ,002594.SZ,300014.SZ,300059.SZ,"
             "300750.SZ,600036.SH,600519.SH,601318.SH,601398.SH,688008.SH,688111.SH,"
-            "688981.SH,600466.SH,000732.SZ,000666.SZ,600530.SZ,002564.SZ"
+            "688981.SH,600466.SH,000732.SZ,000666.SZ,600530.SH,002564.SZ"
         ),
     )
     parser.add_argument("--lookback-days", type=int, default=240)

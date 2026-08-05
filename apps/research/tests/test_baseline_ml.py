@@ -168,7 +168,7 @@ def test_walk_forward_is_deterministic_and_leak_checked() -> None:
     documents = contract_documents()
 
     def run_once() -> dict[str, object]:
-        model, report = run_walk_forward(
+        model, _production, report = run_walk_forward(
             snapshot,
             cost_model_doc=documents["cost-model"],
             market_rules_doc=documents["market-rules"],
@@ -197,7 +197,7 @@ def test_walk_forward_is_deterministic_and_leak_checked() -> None:
 def test_recommendation_labels_cover_buy_hold_sell_watch() -> None:
     snapshot = synthetic_snapshot()
     documents = contract_documents()
-    _, report = run_walk_forward(
+    _, _, report = run_walk_forward(
         snapshot,
         cost_model_doc=documents["cost-model"],
         market_rules_doc=documents["market-rules"],
@@ -216,7 +216,7 @@ def test_recommendation_labels_cover_buy_hold_sell_watch() -> None:
 def test_model_bundle_roundtrip_preserves_scores() -> None:
     snapshot = synthetic_snapshot()
     documents = contract_documents()
-    model, report = run_walk_forward(
+    model, _production, report = run_walk_forward(
         snapshot,
         cost_model_doc=documents["cost-model"],
         market_rules_doc=documents["market-rules"],
@@ -245,3 +245,90 @@ def test_walk_forward_rejects_tiny_history() -> None:
             execution_policy_doc=documents["execution-policy"],
             portfolio_risk_doc=documents["portfolio-risk"],
         )
+
+
+def test_within_window_mutation_does_not_change_historical_features() -> None:
+    snapshot = synthetic_snapshot(days=60)
+    calendar = sorted({bar.trade_date for bar in snapshot.records})
+    mutation_day = calendar[45]
+    target_day = calendar[30]
+
+    mutated_records = tuple(
+        DailyBar(
+            symbol=bar.symbol,
+            trade_date=bar.trade_date,
+            open=bar.open * 1.07,
+            high=bar.high * 1.07,
+            low=bar.low * 1.07,
+            close=bar.close * 1.07,
+            volume=bar.volume * 2,
+            amount=bar.amount * 2,
+        )
+        if bar.symbol == "000001.SZ" and bar.trade_date == mutation_day
+        else bar
+        for bar in snapshot.records
+    )
+    mutated = DatasetSnapshot(
+        dataset_id=snapshot.dataset_id,
+        dataset_family_id=snapshot.dataset_family_id,
+        manifest_sha256=snapshot.manifest_sha256,
+        as_of=snapshot.as_of,
+        data_schema_id=snapshot.data_schema_id,
+        data_schema_sha256=snapshot.data_schema_sha256,
+        normalization_version=snapshot.normalization_version,
+        records=mutated_records,
+    )
+
+    base_rows = tuple(
+        row
+        for row in build_feature_panel(snapshot)
+        if row.symbol == "000001.SZ" and row.trade_date <= target_day
+    )
+    mutated_rows = tuple(
+        row
+        for row in build_feature_panel(mutated)
+        if row.symbol == "000001.SZ" and row.trade_date <= target_day
+    )
+
+    assert base_rows
+    assert mutated_rows == base_rows
+
+
+def test_blocked_sells_cannot_push_portfolio_past_position_limit() -> None:
+    snapshot = synthetic_snapshot(days=90)
+    calendar = sorted({bar.trade_date for bar in snapshot.records})
+    stop_day = calendar[70]
+    records = tuple(
+        bar
+        for bar in snapshot.records
+        if not (bar.symbol == "600519.SH" and bar.trade_date > stop_day)
+    )
+    gapped = DatasetSnapshot(
+        dataset_id=snapshot.dataset_id,
+        dataset_family_id=snapshot.dataset_family_id,
+        manifest_sha256=snapshot.manifest_sha256,
+        as_of=snapshot.as_of,
+        data_schema_id=snapshot.data_schema_id,
+        data_schema_sha256=snapshot.data_schema_sha256,
+        normalization_version=snapshot.normalization_version,
+        records=records,
+    )
+    documents = contract_documents()
+    documents["portfolio-risk"]["max_positions"] = 4
+
+    _model, _production, report = run_walk_forward(
+        gapped,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(top_k=4, per_weight=0.24),
+    )
+
+    assert len(report.final_state.holdings) <= 4
+    market_value = sum(
+        holding.shares * report.final_prices.get(symbol, 0.0)
+        for symbol, holding in report.final_state.holdings.items()
+    )
+    total_assets = float(report.final_state.cash) + market_value
+    assert market_value / total_assets <= 1.0 + 1e-6

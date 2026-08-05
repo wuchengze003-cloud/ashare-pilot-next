@@ -227,7 +227,7 @@ def test_promotion_feeds_live_signal_chain(tmp_path: Path) -> None:
     manifest = write_dataset_files(snapshot, dataset_dir)
     documents = contract_documents()
 
-    model, report = run_walk_forward(
+    model, production_model, report = run_walk_forward(
         snapshot,
         cost_model_doc=documents["cost-model"],
         market_rules_doc=documents["market-rules"],
@@ -240,7 +240,7 @@ def test_promotion_feeds_live_signal_chain(tmp_path: Path) -> None:
     paths = promotion.promote_baseline_model(
         repository_root=ROOT,
         runtime_root=runtime_root,
-        model_bundle_bytes=model.bundle_bytes(),
+        model_bundle_bytes=production_model.bundle_bytes(),
         report=report,
         dataset_manifest=manifest,
         snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
@@ -289,7 +289,7 @@ def test_promotion_report_binds_leak_checks(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "dataset"
     manifest = write_dataset_files(snapshot, dataset_dir)
     documents = contract_documents()
-    model, report = run_walk_forward(
+    model, production_model, report = run_walk_forward(
         snapshot,
         cost_model_doc=documents["cost-model"],
         market_rules_doc=documents["market-rules"],
@@ -300,7 +300,7 @@ def test_promotion_report_binds_leak_checks(tmp_path: Path) -> None:
     paths = promotion.promote_baseline_model(
         repository_root=ROOT,
         runtime_root=tmp_path / "runtime",
-        model_bundle_bytes=model.bundle_bytes(),
+        model_bundle_bytes=production_model.bundle_bytes(),
         report=report,
         dataset_manifest=manifest,
         snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),

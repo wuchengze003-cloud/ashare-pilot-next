@@ -19,7 +19,7 @@ def assembled_document(tmp_path: Path) -> dict:
     snapshot = synthetic_snapshot()
     manifest = write_dataset_files(snapshot, tmp_path / "dataset")
     documents = contract_documents()
-    model, report = run_walk_forward(
+    model, production_model, report = run_walk_forward(
         snapshot,
         cost_model_doc=documents["cost-model"],
         market_rules_doc=documents["market-rules"],
@@ -30,7 +30,7 @@ def assembled_document(tmp_path: Path) -> dict:
     paths = promote_baseline_model(
         repository_root=ROOT,
         runtime_root=tmp_path / "runtime",
-        model_bundle_bytes=model.bundle_bytes(),
+        model_bundle_bytes=production_model.bundle_bytes(),
         report=report,
         dataset_manifest=manifest,
         snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
@@ -87,7 +87,7 @@ def test_web_state_rejects_unknown_mode(tmp_path: Path) -> None:
     snapshot = synthetic_snapshot()
     manifest = write_dataset_files(snapshot, tmp_path / "dataset")
     documents = contract_documents()
-    model, report = run_walk_forward(
+    model, production_model, report = run_walk_forward(
         snapshot,
         cost_model_doc=documents["cost-model"],
         market_rules_doc=documents["market-rules"],
@@ -98,7 +98,7 @@ def test_web_state_rejects_unknown_mode(tmp_path: Path) -> None:
     paths = promote_baseline_model(
         repository_root=ROOT,
         runtime_root=tmp_path / "runtime",
-        model_bundle_bytes=model.bundle_bytes(),
+        model_bundle_bytes=production_model.bundle_bytes(),
         report=report,
         dataset_manifest=manifest,
         snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),

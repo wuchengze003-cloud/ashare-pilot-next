@@ -79,8 +79,13 @@ def build_research_report(report, *, initial_capital) -> dict:
             "validation": (
                 f"{report.validation_start.isoformat()}/{report.validation_end.isoformat()}"
             ),
-            "out_of_sample": f"{report.test_start.isoformat()}/{report.test_end.isoformat()}",
+            "out_of_sample": (
+                f"{report.first_nav_date.isoformat()}/{report.test_end.isoformat()}"
+            ),
         },
+        "production_training_cutoff": report.production_training_cutoff.isoformat(),
+        "first_nav_date": report.first_nav_date.isoformat(),
+        "frozen_valuations": list(report.frozen_valuations),
         "metrics": dict(report.metrics),
         "nav_curve": [dict(point) for point in report.nav_curve],
         "trades": [dict(trade) for trade in report.trades],
@@ -171,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         per_weight=args.per_weight,
     )
-    model, report = run_walk_forward(
+    model, production_model, report = run_walk_forward(
         snapshot,
         cost_model_doc=cost_model_doc,
         market_rules_doc=market_rules_doc,
@@ -185,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     paths = promote_baseline_model(
         repository_root=repository_root,
         runtime_root=runtime_root,
-        model_bundle_bytes=model.bundle_bytes(),
+        model_bundle_bytes=production_model.bundle_bytes(),
         report=report,
         dataset_manifest=manifest,
         snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),

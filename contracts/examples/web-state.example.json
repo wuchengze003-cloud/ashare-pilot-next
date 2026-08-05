@@ -21,6 +21,7 @@
     "strategy_version": "v1",
     "adapter_sha256": "a692698ca214c8354c927ad11998958f834edfdbafe3ac0b507f8587651aa86a",
     "training_cutoff": "2026-07-27",
+    "production_training_cutoff": "2026-07-28",
     "validation_cutoff": "2026-07-28",
     "backtest_window": {"start": "2026-07-01", "end": "2026-07-29"},
     "feature_names": ["close_return_1d", "volume_ratio_5d"]
@@ -31,7 +32,7 @@
       "rank": 1,
       "score": 0.61,
       "recommendation": "BUY",
-      "confidence": 0.66,
+      "rank_strength": 0.66,
       "price_band": {"low": 9.8, "high": 10.0},
       "factors": [
         {"name": "close_return_5d", "weight": 0.31},
@@ -44,7 +45,7 @@
       "rank": 2,
       "score": 0.42,
       "recommendation": "WATCH",
-      "confidence": 0.51,
+      "rank_strength": 0.51,
       "price_band": null,
       "factors": [{"name": "close_return_5d", "weight": 0.31}],
       "risk_notes": ["SYNTHETIC_EXAMPLE"]

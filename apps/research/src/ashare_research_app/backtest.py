@@ -21,6 +21,7 @@ from ashare_quant_core import (
     DatasetSnapshot,
     ExecutionDay,
     SimulatedPortfolioState,
+    classify_board,
     execute_buy,
     execute_sell,
     mark_to_market,
@@ -67,6 +68,9 @@ class BacktestReport:
     test_end: date
     model_bundle_sha256: str
     training_cutoff: date
+    production_training_cutoff: date
+    first_nav_date: date
+    frozen_valuations: tuple[str, ...]
     validation_ic_mean: float
     nav_curve: tuple[Mapping[str, object], ...]
     metrics: Mapping[str, float]
@@ -177,6 +181,8 @@ def run_walk_forward(
     slippage_bps = int(execution_policy_doc["slippage_bps"])
     max_positions = int(portfolio_risk_doc["max_positions"])
     max_single_weight = float(portfolio_risk_doc["max_single_weight"])
+    max_gross_exposure = float(portfolio_risk_doc["max_gross_exposure"])
+    rebalance_threshold = float(portfolio_risk_doc.get("rebalance_threshold", 0.0))
     if cfg.top_k > max_positions:
         raise ValueError("top_k exceeds portfolio-risk max_positions")
     per_weight = min(cfg.per_weight, max_single_weight)
@@ -234,7 +240,44 @@ def run_walk_forward(
 
     model = MultiHorizonModel(horizons=horizons)
     model.fit(feature_matrix, labels_by_horizon, training_cutoff=train_end)
-    bundle_sha256 = MultiHorizonModel.bundle_sha256(model.bundle_bytes())
+
+    max_horizon = max(horizons)
+    production_cutoff = dates[len(dates) - 1 - max_horizon]
+    production_index = date_index[production_cutoff]
+    production_rows = sorted(
+        (row for row in panel if row.trade_date <= production_cutoff),
+        key=lambda row: (row.trade_date, row.symbol),
+    )
+    production_matrix = np.asarray([row.values for row in production_rows], dtype=float)
+    production_labels: dict[int, np.ndarray] = {}
+    for horizon in horizons:
+        labels = np.full(len(production_rows), np.nan, dtype=float)
+        for position, row in enumerate(production_rows):
+            index = date_index[row.trade_date]
+            if index + horizon > production_index:
+                continue
+            symbol_history = history[row.symbol]
+            bar_index = next(
+                (
+                    i
+                    for i, bar in enumerate(symbol_history)
+                    if bar.trade_date == row.trade_date
+                ),
+                None,
+            )
+            if bar_index is None:
+                continue
+            realized = forward_return_label(symbol_history, bar_index, horizon)
+            if realized is not None:
+                labels[position] = realized
+        production_labels[horizon] = labels
+    production_model = MultiHorizonModel(horizons=horizons)
+    production_model.fit(
+        production_matrix,
+        production_labels,
+        training_cutoff=production_cutoff,
+    )
+    bundle_sha256 = MultiHorizonModel.bundle_sha256(production_model.bundle_bytes())
 
     validation_dates = [
         day
@@ -265,8 +308,8 @@ def run_walk_forward(
     nav_points: list[Mapping[str, object]] = []
     benchmark_symbols: tuple[str, ...] = ()
     benchmark_base: dict[str, float] = {}
+    first_nav_date: date | None = None
     executed_days = 0
-    gross_traded = Decimal("0")
     asset_samples: list[Decimal] = []
 
     test_dates = [day for day in dates if day >= test_start]
@@ -277,7 +320,12 @@ def run_walk_forward(
             continue
         signal_date = prior_signals[-1]
         if not benchmark_symbols:
-            benchmark_base = _last_known_close(history, through=execution_date)
+            tradable: dict[str, float] = {}
+            for symbol, bars in history.items():
+                todays = [bar for bar in bars if bar.trade_date == execution_date]
+                if todays:
+                    tradable[symbol] = todays[0].close
+            benchmark_base = tradable
             benchmark_symbols = tuple(sorted(benchmark_base))
 
         scores = score_date(signal_date)
@@ -309,6 +357,34 @@ def run_walk_forward(
             slippage_bps=slippage_bps,
         )
 
+        def record_trade(symbol: str, side: str, trade, skip, *, trade_date=execution_date):
+            if trade is not None:
+                trades.append(
+                    {
+                        "trade_date": trade_date.isoformat(),
+                        "symbol": symbol,
+                        "side": side,
+                        "shares": trade.shares,
+                        "price": trade.price,
+                        "gross_amount": float(trade.gross_amount),
+                        "total_cost": float(trade.cost.total),
+                        "reason": trade.reason,
+                    }
+                )
+            elif skip is not None:
+                trades.append(
+                    {
+                        "trade_date": trade_date.isoformat(),
+                        "symbol": symbol,
+                        "side": side,
+                        "shares": 0,
+                        "price": 0.0,
+                        "gross_amount": 0.0,
+                        "total_cost": 0.0,
+                        "reason": f"SKIPPED_{skip.reason_code}",
+                    }
+                )
+
         for symbol in sorted(state.holdings):
             if symbol in targets:
                 continue
@@ -320,42 +396,62 @@ def run_walk_forward(
                 cost_model=cost_model_doc,
                 reason="MODEL_EXIT",
             )
-            if trade is not None:
-                gross_traded += trade.gross_amount
-                trades.append(
-                    {
-                        "trade_date": execution_date.isoformat(),
-                        "symbol": symbol,
-                        "side": "sell",
-                        "shares": trade.shares,
-                        "price": trade.price,
-                        "gross_amount": float(trade.gross_amount),
-                        "total_cost": float(trade.cost.total),
-                        "reason": trade.reason,
-                    }
-                )
-            elif skip is not None:
-                trades.append(
-                    {
-                        "trade_date": execution_date.isoformat(),
-                        "symbol": symbol,
-                        "side": "sell",
-                        "shares": 0,
-                        "price": 0.0,
-                        "gross_amount": 0.0,
-                        "total_cost": 0.0,
-                        "reason": f"SKIPPED_{skip.reason_code}",
-                    }
-                )
+            record_trade(symbol, "sell", trade, skip)
 
+        total_assets_float = float(total_assets)
+
+        for symbol in sorted(state.holdings):
+            if symbol not in targets or symbol not in prev_prices:
+                continue
+            holding = state.holdings[symbol]
+            current_weight = holding.shares * prev_prices[symbol] / total_assets_float
+            drift = per_weight - current_weight
+            lot = rules[classify_board(symbol)].lot_size
+            if drift < -rebalance_threshold:
+                excess_shares = int(((-drift) * total_assets_float) // prev_prices[symbol])
+                if excess_shares >= lot:
+                    state, trade, skip = execute_sell(
+                        state=state,
+                        day=execution_day,
+                        symbol=symbol,
+                        rules=rules,
+                        cost_model=cost_model_doc,
+                        reason="REBALANCE_TRIM",
+                        max_shares=excess_shares,
+                    )
+                    record_trade(symbol, "sell", trade, skip)
+            elif drift > rebalance_threshold:
+                requested = int((drift * total_assets_float) // prev_prices[symbol])
+                if requested >= lot:
+                    state, trade, skip, bought_on = execute_buy(
+                        state=state,
+                        day=execution_day,
+                        symbol=symbol,
+                        requested_shares=requested,
+                        rules=rules,
+                        cost_model=cost_model_doc,
+                        reason="REBALANCE_TOPUP",
+                    )
+                    if trade is not None and bought_on is not None:
+                        buy_dates.setdefault(symbol, bought_on)
+                    record_trade(symbol, "buy", trade, skip)
+
+        held_gross_weight = sum(
+            holding.shares * prev_prices.get(symbol, 0.0)
+            for symbol, holding in state.holdings.items()
+        ) / total_assets_float
+        available_slots = max_positions - len(state.holdings)
+        exposure_budget = max_gross_exposure - held_gross_weight
         for symbol in targets:
             if symbol in state.holdings:
+                continue
+            if available_slots <= 0 or exposure_budget < per_weight * 0.5:
                 continue
             reference_price = prev_prices.get(symbol)
             if reference_price is None:
                 continue
-            desired_value = float(total_assets) * per_weight
-            requested = int(desired_value // reference_price)
+            buy_weight = min(per_weight, exposure_budget)
+            requested = int((total_assets_float * buy_weight) // reference_price)
             state, trade, skip, bought_on = execute_buy(
                 state=state,
                 day=execution_day,
@@ -367,32 +463,9 @@ def run_walk_forward(
             )
             if trade is not None and bought_on is not None:
                 buy_dates[symbol] = bought_on
-                gross_traded += trade.gross_amount
-                trades.append(
-                    {
-                        "trade_date": execution_date.isoformat(),
-                        "symbol": symbol,
-                        "side": "buy",
-                        "shares": trade.shares,
-                        "price": trade.price,
-                        "gross_amount": float(trade.gross_amount),
-                        "total_cost": float(trade.cost.total),
-                        "reason": trade.reason,
-                    }
-                )
-            elif skip is not None:
-                trades.append(
-                    {
-                        "trade_date": execution_date.isoformat(),
-                        "symbol": symbol,
-                        "side": "buy",
-                        "shares": 0,
-                        "price": 0.0,
-                        "gross_amount": 0.0,
-                        "total_cost": 0.0,
-                        "reason": f"SKIPPED_{skip.reason_code}",
-                    }
-                )
+                available_slots -= 1
+                exposure_budget -= per_weight
+            record_trade(symbol, "buy", trade, skip)
 
         close_prices = _last_known_close(history, through=execution_date)
         held_close_prices = {
@@ -404,10 +477,12 @@ def run_walk_forward(
         benchmark_values = []
         for symbol in benchmark_symbols:
             base = benchmark_base.get(symbol)
-            visible = [bar for bar in history[symbol] if bar.trade_date <= execution_date]
-            if base and visible:
-                benchmark_values.append(visible[-1].close / base)
+            todays = [bar for bar in history[symbol] if bar.trade_date == execution_date]
+            if base and todays:
+                benchmark_values.append(todays[0].close / base)
         benchmark_nav = sum(benchmark_values) / len(benchmark_values) if benchmark_values else 1.0
+        if first_nav_date is None:
+            first_nav_date = execution_date
         nav_points.append(
             {
                 "trade_date": execution_date.isoformat(),
@@ -420,9 +495,22 @@ def run_walk_forward(
     if not nav_points:
         raise ValueError("walk-forward simulation produced no out-of-sample days")
 
+    assert first_nav_date is not None
+    nav_points.insert(
+        0,
+        {"trade_date": first_nav_date.isoformat(), "nav": 1.0, "benchmark_nav": 1.0},
+    )
+    gross_traded = Decimal(str(sum(float(t["gross_amount"]) for t in trades)))
+    last_execution_day = date.fromisoformat(str(nav_points[-1]["trade_date"]))
+    frozen_valuations = tuple(
+        symbol
+        for symbol in sorted(state.holdings)
+        if history[symbol][-1].trade_date < last_execution_day
+    )
+
     navs = [float(point["nav"]) for point in nav_points]
     total_return = navs[-1] - 1.0
-    peak = navs[0]
+    peak = 1.0
     max_drawdown = 0.0
     daily_returns: list[float] = []
     for index, value in enumerate(navs):
@@ -463,7 +551,7 @@ def run_walk_forward(
             recommendation = "SELL"
         else:
             recommendation = "WATCH"
-        confidence = min(0.95, 0.5 + 0.5 * (1 - (rank - 1) / max(number_of_symbols - 1, 1)))
+        rank_strength = 1.0 - (rank - 1) / max(number_of_symbols, 1)
         last_close = latest_prices.get(symbol)
         price_band = None
         risk_notes: list[str] = []
@@ -472,6 +560,8 @@ def run_walk_forward(
         symbol_history = history.get(symbol, [])
         if symbol_history and symbol_history[-1].trade_date < latest_signal_date:
             risk_notes.append("NO_BAR_ON_SIGNAL_DATE")
+        if symbol in frozen_valuations:
+            risk_notes.append("VALUATION_FROZEN_NO_BAR")
         if len(symbol_history) >= 2:
             prev_close = symbol_history[-2].close
             segment = rules.get(
@@ -495,7 +585,7 @@ def run_walk_forward(
                 "rank": rank,
                 "score": round(score, 6),
                 "recommendation": recommendation,
-                "confidence": round(confidence, 4),
+                "rank_strength": round(rank_strength, 4),
                 "price_band": price_band,
                 "risk_notes": risk_notes,
             }
@@ -541,8 +631,18 @@ def run_walk_forward(
             check_id="feature_pit_truncation_invariant",
             status=pit_status,
             detail=(
-                "feature panel rebuilt with as_of=latest signal date equals the "
-                "visible subset of the full panel"
+                "panel rebuilt with as_of=latest signal date equals the visible "
+                "subset of the full panel; within-window mutation coverage is in "
+                "unit tests"
+            ),
+        ),
+        LeakCheck(
+            check_id="universe_fixed_audit_set_disclosed",
+            status="pass",
+            detail=(
+                "universe is a fixed audit list including delisted and suspended "
+                "names; no rolling point-in-time membership; survivorship control "
+                "limited to the fixed list"
             ),
         ),
     )
@@ -557,6 +657,9 @@ def run_walk_forward(
         test_end=dates[-1],
         model_bundle_sha256=bundle_sha256,
         training_cutoff=train_end,
+        production_training_cutoff=production_cutoff,
+        first_nav_date=first_nav_date,
+        frozen_valuations=frozen_valuations,
         validation_ic_mean=validation_ic_mean,
         nav_curve=tuple(nav_points),
         metrics={
@@ -576,4 +679,4 @@ def run_walk_forward(
         leak_checks=leak_checks,
         scores_latest=latest_scores,
     )
-    return model, report
+    return model, production_model, report

@@ -273,8 +273,9 @@ def execute_sell(
     rules: Mapping[str, MarketRuleSegment],
     cost_model: Mapping[str, object],
     reason: str,
+    max_shares: int | None = None,
 ) -> tuple[SimulatedPortfolioState, SimulatedTrade | None, SimulatedSkip | None]:
-    """Sell every unlocked share of one symbol at the open with slippage."""
+    """Sell unlocked shares (all by default) at the open with slippage."""
     board = classify_board(symbol)
     segment = rules.get(board)
     if segment is None:
@@ -283,6 +284,10 @@ def execute_sell(
     if holding is None or holding.shares == 0:
         return state, None, SimulatedSkip(symbol, "sell", "NO_HOLDING")
     sellable = holding.shares - holding.locked_shares
+    if max_shares is not None:
+        if max_shares < 0:
+            raise SimulatedExecutionError("max_shares must be non-negative")
+        sellable = min(sellable, max_shares)
     if sellable <= 0:
         return state, None, SimulatedSkip(symbol, "sell", "T1_LOCKED")
     bar = day.bars.get(symbol)
