@@ -234,7 +234,8 @@ function renderMetrics(state) {
   const s = state.performance.splits;
   $("split-info").textContent =
     `样本划分：样本内 ≤ ${s.in_sample.split("/")[1]} ｜ 验证集 ${s.validation} ｜ 样本外 ${s.out_of_sample} · ` +
-    `评估模型训练截止 ${model.training_cutoff} · 生产模型训练截止 ${model.production_training_cutoff} · ` +
+    `绩效仅来自评估模型（截止 ${model.training_cutoff}）严格 OOS · ` +
+    `当前建议由生产模型（截止 ${model.production_training_cutoff}，与 OOS 重叠，仅信号生成、不评估绩效）评分 · ` +
     `固定切分顺序回测（无滚动重训） · 数据集 ${model.dataset_id}`;
 }
 

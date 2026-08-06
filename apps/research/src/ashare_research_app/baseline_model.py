@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 
 import numpy as np
+import sklearn
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 DEFAULT_HORIZONS: tuple[int, ...] = (1, 3, 5)
@@ -92,6 +93,8 @@ class MultiHorizonModel:
             "code_version": MODEL_CODE_VERSION,
             "horizons": list(self.horizons),
             "training_cutoff": self.training_cutoff.isoformat(),
+            "sklearn_version": sklearn.__version__,
+            "numpy_version": np.__version__,
             "models": {horizon: self.models[horizon] for horizon in self.horizons},
         }
         return pickle.dumps(bundle, protocol=5)
@@ -101,6 +104,16 @@ class MultiHorizonModel:
         bundle = pickle.loads(content)
         if bundle.get("code_version") != MODEL_CODE_VERSION:
             raise ValueError("unsupported model bundle version")
+        if bundle.get("sklearn_version") != sklearn.__version__:
+            raise ValueError(
+                f"model bundle sklearn version {bundle.get('sklearn_version')} "
+                f"does not match runtime {sklearn.__version__}"
+            )
+        if bundle.get("numpy_version") != np.__version__:
+            raise ValueError(
+                f"model bundle numpy version {bundle.get('numpy_version')} "
+                f"does not match runtime {np.__version__}"
+            )
         model = MultiHorizonModel(horizons=tuple(bundle["horizons"]))
         model.models = dict(bundle["models"])
         model.training_cutoff = date.fromisoformat(bundle["training_cutoff"])

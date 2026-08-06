@@ -174,8 +174,17 @@ def run_walk_forward(
     portfolio_risk_doc: Mapping[str, object],
     config: PilotConfig | None = None,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
-) -> tuple[MultiHorizonModel, BacktestReport]:
-    """Train, validate, and simulate strictly out-of-sample."""
+) -> tuple[MultiHorizonModel, MultiHorizonModel, BacktestReport]:
+    """Train, validate, and simulate strictly out-of-sample.
+
+    Returns (evaluation_model, production_model, report). The evaluation
+    model is trained only on the train window and drives the OOS
+    simulation and all performance metrics. The production model is
+    retrained to the latest safe label date; its training window
+    overlaps the OOS period, so it is used only for signal generation
+    and current recommendations and must never be used to assess
+    performance.
+    """
     cfg = config or PilotConfig()
     rules = parse_market_rules(market_rules_doc)
     slippage_bps = int(execution_policy_doc["slippage_bps"])
@@ -279,11 +288,14 @@ def run_walk_forward(
     )
     bundle_sha256 = MultiHorizonModel.bundle_sha256(production_model.bundle_bytes())
 
+    test_start_index = date_index[test_start]
     validation_dates = [
         day
         for day in dates
         if validation_start <= day <= validation_end
+        and date_index[day] + LABEL_HORIZON_FOR_VALIDATION < test_start_index
     ]
+    validation_ic_end = validation_dates[-1] if validation_dates else validation_start
     ics = _spearman_ics(
         history=history,
         rows_by_date=rows_by_date,
@@ -300,6 +312,15 @@ def run_walk_forward(
             return {}
         matrix = np.asarray([row.values for row in rows], dtype=float)
         scores = model.score(matrix)
+        return {row.symbol: float(score) for row, score in zip(rows, scores, strict=True)}
+
+    def score_production(signal_date: date) -> dict[str, float]:
+        """Score with the production model; for signal generation only."""
+        rows = rows_by_date.get(signal_date, [])
+        if not rows:
+            return {}
+        matrix = np.asarray([row.values for row in rows], dtype=float)
+        scores = production_model.score(matrix)
         return {row.symbol: float(score) for row, score in zip(rows, scores, strict=True)}
 
     state = SimulatedPortfolioState(cash=cfg.initial_capital, holdings={})
@@ -496,9 +517,11 @@ def run_walk_forward(
         raise ValueError("walk-forward simulation produced no out-of-sample days")
 
     assert first_nav_date is not None
+    baseline_index = date_index[first_nav_date] - 1
+    baseline_date = dates[max(baseline_index, 0)]
     nav_points.insert(
         0,
-        {"trade_date": first_nav_date.isoformat(), "nav": 1.0, "benchmark_nav": 1.0},
+        {"trade_date": baseline_date.isoformat(), "nav": 1.0, "benchmark_nav": 1.0},
     )
     gross_traded = Decimal(str(sum(float(t["gross_amount"]) for t in trades)))
     last_execution_day = date.fromisoformat(str(nav_points[-1]["trade_date"]))
@@ -532,7 +555,7 @@ def run_walk_forward(
     )
 
     latest_signal_date = signal_dates[-1]
-    latest_scores = score_date(latest_signal_date)
+    latest_scores = score_production(latest_signal_date)
     latest_ranked = sorted(latest_scores.items(), key=lambda item: (-item[1], item[0]))
     latest_targets = [symbol for symbol, _ in latest_ranked[: cfg.top_k]]
     latest_prices = _last_known_close(history, through=latest_signal_date)
@@ -564,13 +587,7 @@ def run_walk_forward(
             risk_notes.append("VALUATION_FROZEN_NO_BAR")
         if len(symbol_history) >= 2:
             prev_close = symbol_history[-2].close
-            segment = rules.get(
-                "star"
-                if symbol.startswith("688")
-                else "gem"
-                if symbol.startswith(("300", "301", "302"))
-                else "main"
-            )
+            segment = rules.get(classify_board(symbol))
             if segment is not None and last_close is not None:
                 if last_close >= prev_close * (1 + segment.price_limit_pct * 0.95):
                     risk_notes.append("NEAR_LIMIT_UP")
@@ -596,7 +613,7 @@ def run_walk_forward(
     )
     feature_weights: list[Mapping[str, object]] = []
     if score_matrix.size:
-        latest_score_vector = model.score(score_matrix)
+        latest_score_vector = production_model.score(score_matrix)
         for column, name in enumerate(FEATURE_NAMES):
             column_values = score_matrix[:, column]
             weight = abs(_rank_correlation(list(column_values), list(latest_score_vector)))
@@ -621,6 +638,15 @@ def run_walk_forward(
             check_id="label_window_inside_train",
             status="pass",
             detail=f"latest label end date {max_label_end.isoformat()} <= train_end",
+        ),
+        LeakCheck(
+            check_id="validation_labels_outside_test",
+            status="pass",
+            detail=(
+                f"validation IC scored over [{validation_start.isoformat()},"
+                f"{validation_ic_end.isoformat()}]; every {LABEL_HORIZON_FOR_VALIDATION}-day "
+                f"label ends before test_start={test_start.isoformat()}"
+            ),
         ),
         LeakCheck(
             check_id="training_rows_time_ordered",

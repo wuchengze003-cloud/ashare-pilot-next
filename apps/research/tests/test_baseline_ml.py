@@ -332,3 +332,55 @@ def test_blocked_sells_cannot_push_portfolio_past_position_limit() -> None:
     )
     total_assets = float(report.final_state.cash) + market_value
     assert market_value / total_assets <= 1.0 + 1e-6
+
+
+def test_nav_curve_has_no_duplicate_trade_dates() -> None:
+    snapshot = synthetic_snapshot()
+    documents = contract_documents()
+    _m, _p, report = run_walk_forward(
+        snapshot,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(top_k=4, per_weight=0.24),
+    )
+    dates_seen = [str(point["trade_date"]) for point in report.nav_curve]
+    assert len(dates_seen) == len(set(dates_seen))
+    assert report.nav_curve[0]["nav"] == 1.0
+    assert dates_seen[0] < dates_seen[1]
+
+
+def test_bundle_load_rejects_library_version_mismatch() -> None:
+    import pickle as _pickle
+
+    snapshot = synthetic_snapshot()
+    documents = contract_documents()
+    _m, production, _r = run_walk_forward(
+        snapshot,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(top_k=4, per_weight=0.24),
+    )
+    bundle = _pickle.loads(production.bundle_bytes())
+    bundle["sklearn_version"] = "0.0.1-tampered"
+    with pytest.raises(ValueError, match="sklearn version"):
+        MultiHorizonModel.from_bundle_bytes(_pickle.dumps(bundle))
+
+
+def test_validation_ic_window_ends_before_test_period() -> None:
+    snapshot = synthetic_snapshot()
+    documents = contract_documents()
+    _m, _p, report = run_walk_forward(
+        snapshot,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(top_k=4, per_weight=0.24),
+    )
+    checks = {check.check_id: check for check in report.leak_checks}
+    assert "validation_labels_outside_test" in checks
+    assert checks["validation_labels_outside_test"].status == "pass"

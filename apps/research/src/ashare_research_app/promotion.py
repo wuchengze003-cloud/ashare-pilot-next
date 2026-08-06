@@ -84,6 +84,7 @@ from datetime import date
 from pathlib import Path
 
 import numpy as np
+import sklearn
 from ashare_quant_core import DailyBar, DatasetSnapshot, TargetPosition, UniverseSnapshot
 
 FEATURE_NAMES = {feature_names}
@@ -157,6 +158,10 @@ def build_strategy(config: Mapping[str, object]) -> BaselineMLStrategy:
     if hashlib.sha256(content).hexdigest() != config["model_bundle_sha256"]:
         raise ValueError("model bundle hash mismatch")
     bundle = pickle.loads(content)
+    if bundle.get("sklearn_version") != sklearn.__version__:
+        raise ValueError("model bundle sklearn version mismatch")
+    if bundle.get("numpy_version") != np.__version__:
+        raise ValueError("model bundle numpy version mismatch")
     return BaselineMLStrategy(
         bundle=bundle,
         top_k=int(config["top_k"]),
