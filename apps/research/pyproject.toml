@@ -3,7 +3,11 @@ name = "ashare-research-app"
 version = "0.1.0"
 description = "Experiment, race, evaluation, and promotion application"
 requires-python = ">=3.11"
-dependencies = ["ashare-quant-core"]
+dependencies = [
+    "ashare-quant-core",
+    "numpy>=2.0,<3",
+    "scikit-learn>=1.5,<2",
+]
 
 [tool.uv.sources]
 ashare-quant-core = {workspace = true}

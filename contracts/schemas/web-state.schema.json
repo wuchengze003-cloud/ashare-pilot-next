@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ashare-pilot-next/web-state-v1.schema.json",
+  "title": "Web State 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "state_id",
+    "as_of",
+    "generated_at",
+    "data_source",
+    "market",
+    "model",
+    "rankings",
+    "portfolio",
+    "performance"
+  ],
+  "properties": {
+    "contract_id": {"const": "web-state"},
+    "schema_version": {"const": "1.0.0"},
+    "state_id": {"type": "string", "minLength": 1, "maxLength": 120},
+    "as_of": {"type": "string", "format": "date"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "data_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "is_official_vendor",
+        "mode",
+        "latest_trade_date",
+        "notices"
+      ],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1, "maxLength": 80},
+        "is_official_vendor": {"type": "boolean"},
+        "mode": {"enum": ["live-fetch", "m1-replay", "synthetic"]},
+        "latest_trade_date": {"type": ["string", "null"], "format": "date"},
+        "notices": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      }
+    },
+    "market": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calendar_date", "is_open", "session_label"],
+      "properties": {
+        "calendar_date": {"type": "string", "format": "date"},
+        "is_open": {"type": "boolean"},
+        "session_label": {
+          "enum": ["PRE_OPEN", "OPEN", "MIDDAY_BREAK", "CLOSED", "HOLIDAY", "UNKNOWN"]
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy_id",
+        "strategy_version",
+        "adapter_sha256",
+        "training_cutoff",
+        "validation_cutoff",
+        "backtest_window",
+        "feature_names"
+      ],
+      "properties": {
+        "strategy_id": {"type": "string", "minLength": 1, "maxLength": 80},
+        "strategy_version": {"type": "string", "minLength": 1, "maxLength": 40},
+        "adapter_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "training_cutoff": {"type": "string", "format": "date"},
+        "validation_cutoff": {"type": "string", "format": "date"},
+        "backtest_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": {"type": "string", "format": "date"},
+            "end": {"type": "string", "format": "date"}
+          }
+        },
+        "feature_names": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 60}
+        },
+        "validation_ic_mean": {"type": "number"},
+        "production_training_cutoff": {"type": "string", "format": "date"},
+        "signal_sequence": {"type": "integer", "minimum": 0},
+        "signal_state": {
+          "enum": ["ACTIVE", "HOLD", "REDUCE_ONLY", "FLAT", "UNAVAILABLE"]
+        },
+        "dataset_id": {"type": "string", "minLength": 1, "maxLength": 160}
+      }
+    },
+    "rankings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "symbol",
+          "rank",
+          "score",
+          "recommendation",
+          "rank_strength",
+          "price_band",
+          "factors",
+          "risk_notes"
+        ],
+        "properties": {
+          "symbol": {"type": "string", "pattern": "^[0-9]{6}\\.(SZ|SH|BJ)$"},
+          "rank": {"type": "integer", "minimum": 1},
+          "score": {"type": "number"},
+          "recommendation": {"enum": ["BUY", "HOLD", "SELL", "WATCH"]},
+          "rank_strength": {"type": "number", "minimum": 0, "maximum": 1},
+          "price_band": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["low", "high"],
+            "properties": {
+              "low": {"type": "number", "exclusiveMinimum": 0},
+              "high": {"type": "number", "exclusiveMinimum": 0}
+            }
+          },
+          "factors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "weight"],
+              "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 60},
+                "weight": {"type": "number"}
+              }
+            }
+          },
+          "risk_notes": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 200}
+          }
+        }
+      }
+    },
+    "portfolio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "initial_capital",
+        "cash",
+        "market_value",
+        "total_assets",
+        "positions",
+        "recent_actions"
+      ],
+      "properties": {
+        "initial_capital": {"type": "number", "exclusiveMinimum": 0},
+        "cash": {"type": "number", "minimum": 0},
+        "market_value": {"type": "number", "minimum": 0},
+        "total_assets": {"type": "number", "minimum": 0},
+        "positions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "symbol",
+              "shares",
+              "locked_shares",
+              "avg_cost",
+              "last_price",
+              "market_value",
+              "weight"
+            ],
+            "properties": {
+              "symbol": {"type": "string", "pattern": "^[0-9]{6}\\.(SZ|SH|BJ)$"},
+              "shares": {"type": "integer", "minimum": 0},
+              "locked_shares": {"type": "integer", "minimum": 0},
+              "avg_cost": {"type": "number", "exclusiveMinimum": 0},
+              "last_price": {"type": "number", "exclusiveMinimum": 0},
+              "market_value": {"type": "number", "minimum": 0},
+              "weight": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+          }
+        },
+        "recent_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "trade_date",
+              "symbol",
+              "side",
+              "shares",
+              "price",
+              "gross_amount",
+              "total_cost",
+              "reason"
+            ],
+            "properties": {
+              "trade_date": {"type": "string", "format": "date"},
+              "symbol": {"type": "string", "pattern": "^[0-9]{6}\\.(SZ|SH|BJ)$"},
+              "side": {"enum": ["buy", "sell"]},
+              "shares": {"type": "integer", "minimum": 1},
+              "price": {"type": "number", "exclusiveMinimum": 0},
+              "gross_amount": {"type": "number", "minimum": 0},
+              "total_cost": {"type": "number", "minimum": 0},
+              "reason": {"type": "string", "minLength": 1, "maxLength": 200}
+            }
+          }
+        }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nav_curve",
+        "metrics",
+        "splits",
+        "leak_checks"
+      ],
+      "properties": {
+        "nav_curve": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["trade_date", "nav", "benchmark_nav"],
+            "properties": {
+              "trade_date": {"type": "string", "format": "date"},
+              "nav": {"type": "number", "exclusiveMinimum": 0},
+              "benchmark_nav": {"type": "number", "exclusiveMinimum": 0}
+            }
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "total_return",
+            "benchmark_total_return",
+            "max_drawdown",
+            "win_rate",
+            "turnover"
+          ],
+          "properties": {
+            "total_return": {"type": "number"},
+            "benchmark_total_return": {"type": "number"},
+            "max_drawdown": {"type": "number", "minimum": 0, "maximum": 1},
+            "win_rate": {"type": "number", "minimum": 0, "maximum": 1},
+            "turnover": {"type": "number", "minimum": 0}
+          }
+        },
+        "splits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["in_sample", "validation", "out_of_sample"],
+          "properties": {
+            "in_sample": {"type": "string", "minLength": 1, "maxLength": 80},
+            "validation": {"type": "string", "minLength": 1, "maxLength": 80},
+            "out_of_sample": {"type": "string", "minLength": 1, "maxLength": 80}
+          }
+        },
+        "leak_checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["check_id", "status", "detail"],
+            "properties": {
+              "check_id": {"type": "string", "minLength": 1, "maxLength": 60},
+              "status": {"enum": ["pass", "fail"]},
+              "detail": {"type": "string", "minLength": 1, "maxLength": 300}
+            }
+          }
+        }
+      }
+    }
+  }
+}

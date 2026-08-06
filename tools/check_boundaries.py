@@ -76,6 +76,8 @@ ALLOWED_INTERNAL_IMPORTS = {
     "services/data_gateway": {"ashare_data_gateway"},
     "apps/research": {"ashare_quant_core", "ashare_research_app"},
     "apps/signal_runner": {"ashare_quant_core", "ashare_signal_runner"},
+    "apps/web": set(),
+    "ops": set(),
     "tools": set(),
 }
 ALLOWED_INTERNAL_DISTRIBUTIONS = {
