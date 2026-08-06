@@ -384,3 +384,44 @@ def test_validation_ic_window_ends_before_test_period() -> None:
     checks = {check.check_id: check for check in report.leak_checks}
     assert "validation_labels_outside_test" in checks
     assert checks["validation_labels_outside_test"].status == "pass"
+
+
+def test_suspended_symbol_labels_cannot_cross_test_period() -> None:
+    snapshot = synthetic_snapshot(days=90)
+    calendar = sorted({bar.trade_date for bar in snapshot.records})
+    validation_end_day = calendar[int(len(calendar) * 0.78) - 1]
+    gap_start = calendar[int(len(calendar) * 0.62)]
+    records = tuple(
+        bar
+        for bar in snapshot.records
+        if not (
+            bar.symbol == "000732.SZ"
+            and gap_start <= bar.trade_date <= validation_end_day
+        )
+    )
+    gapped = DatasetSnapshot(
+        dataset_id=snapshot.dataset_id,
+        dataset_family_id=snapshot.dataset_family_id,
+        manifest_sha256=snapshot.manifest_sha256,
+        as_of=snapshot.as_of,
+        data_schema_id=snapshot.data_schema_id,
+        data_schema_sha256=snapshot.data_schema_sha256,
+        normalization_version=snapshot.normalization_version,
+        records=records,
+    )
+    documents = contract_documents()
+    _m, _p, report = run_walk_forward(
+        gapped,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(top_k=4, per_weight=0.24),
+    )
+    checks = {check.check_id: check for check in report.leak_checks}
+    check = checks["validation_labels_outside_test"]
+    assert check.status == "pass"
+    from datetime import date as _date
+
+    detail_max = _date.fromisoformat(check.detail.split("actual max label end ")[1].split(" ")[0])
+    assert detail_max < report.test_start

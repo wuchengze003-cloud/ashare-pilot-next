@@ -133,8 +133,16 @@ def _spearman_ics(
     rows_by_date: dict[date, list[FeatureRow]],
     model: MultiHorizonModel,
     dates: Sequence[date],
-) -> list[float]:
+    label_must_end_before: date,
+) -> tuple[list[float], date | None]:
+    """Rank IC per date; per-symbol labels must end before the given date.
+
+    Symbols use their own bar sequence, so a suspended name's horizon bar
+    can land later than the global calendar implies; such pairs are
+    excluded here and the true maximum label end date is returned.
+    """
     ics: list[float] = []
+    max_label_end: date | None = None
     for signal_date in dates:
         rows = rows_by_date.get(signal_date, [])
         pairs: list[tuple[float, float]] = []
@@ -146,14 +154,22 @@ def _spearman_ics(
             )
             if index is None:
                 continue
+            label_end_index = index + LABEL_HORIZON_FOR_VALIDATION
+            if label_end_index >= len(symbol_history):
+                continue
+            label_end = symbol_history[label_end_index].trade_date
+            if label_end >= label_must_end_before:
+                continue
             realized = forward_return_label(symbol_history, index, LABEL_HORIZON_FOR_VALIDATION)
             if realized is None:
                 continue
+            if max_label_end is None or label_end > max_label_end:
+                max_label_end = label_end
             score = float(model.score(np.asarray(row.values, dtype=float).reshape(1, -1))[0])
             pairs.append((score, realized))
         if len(pairs) >= 3:
             ics.append(_rank_correlation([p[0] for p in pairs], [p[1] for p in pairs]))
-    return ics
+    return ics, max_label_end
 
 
 def _last_known_close(history: dict[str, list[DailyBar]], *, through: date) -> dict[str, float]:
@@ -276,6 +292,11 @@ def run_walk_forward(
             )
             if bar_index is None:
                 continue
+            label_end_index = bar_index + horizon
+            if label_end_index >= len(symbol_history):
+                continue
+            if symbol_history[label_end_index].trade_date > production_cutoff:
+                continue
             realized = forward_return_label(symbol_history, bar_index, horizon)
             if realized is not None:
                 labels[position] = realized
@@ -295,14 +316,18 @@ def run_walk_forward(
         if validation_start <= day <= validation_end
         and date_index[day] + LABEL_HORIZON_FOR_VALIDATION < test_start_index
     ]
-    validation_ic_end = validation_dates[-1] if validation_dates else validation_start
-    ics = _spearman_ics(
+    if not validation_dates:
+        raise ValueError("validation window is empty after label truncation")
+    ics, validation_ic_end = _spearman_ics(
         history=history,
         rows_by_date=rows_by_date,
         model=model,
         dates=validation_dates,
+        label_must_end_before=test_start,
     )
-    validation_ic_mean = float(sum(ics) / len(ics)) if ics else 0.0
+    if not ics or validation_ic_end is None:
+        raise ValueError("validation IC produced no observations")
+    validation_ic_mean = float(sum(ics) / len(ics))
 
     signal_dates = [day for day in dates if day in rows_by_date]
 
@@ -641,11 +666,11 @@ def run_walk_forward(
         ),
         LeakCheck(
             check_id="validation_labels_outside_test",
-            status="pass",
+            status="pass" if validation_ic_end < test_start else "fail",
             detail=(
                 f"validation IC scored over [{validation_start.isoformat()},"
-                f"{validation_ic_end.isoformat()}]; every {LABEL_HORIZON_FOR_VALIDATION}-day "
-                f"label ends before test_start={test_start.isoformat()}"
+                f"{validation_ic_end.isoformat()}]; actual max label end "
+                f"{validation_ic_end.isoformat()} vs test_start={test_start.isoformat()}"
             ),
         ),
         LeakCheck(
