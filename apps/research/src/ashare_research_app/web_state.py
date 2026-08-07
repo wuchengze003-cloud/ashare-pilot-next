@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,38 @@ from jsonschema import Draft202012Validator, FormatChecker
 from .features import FEATURE_NAMES
 
 ROOT = Path(__file__).resolve().parents[4]
+
+CYCLE_CURRENT = "CURRENT"
+CYCLE_DEGRADED = "DEGRADED"
+CYCLE_STALE = "STALE"
+CYCLE_UNAVAILABLE = "UNAVAILABLE"
+
+
+def verify_signal_binding(
+    *,
+    latest_signal: Mapping[str, Any] | None,
+    as_of: str,
+    current_snapshot_sha256: str | None,
+    active_champion_sha256: str | None,
+) -> list[str]:
+    """Return mismatch reasons; an empty list means the signal is current."""
+    if latest_signal is None:
+        return ["NO_SIGNAL"]
+    reasons: list[str] = []
+    if str(latest_signal.get("as_of")) != as_of:
+        reasons.append("AS_OF_MISMATCH")
+    contract_set = latest_signal.get("contract_set", {})
+    if not isinstance(contract_set, Mapping):
+        return ["SIGNAL_CONTRACT_SET_MISSING"]
+    if current_snapshot_sha256 is not None and contract_set.get(
+        "dataset_snapshot_sha256"
+    ) != current_snapshot_sha256:
+        reasons.append("SNAPSHOT_MISMATCH")
+    if active_champion_sha256 is not None and contract_set.get(
+        "champion_sha256"
+    ) != active_champion_sha256:
+        reasons.append("CHAMPION_MISMATCH")
+    return reasons
 
 
 def _load_json_object(path: Path) -> dict[str, Any]:
@@ -58,13 +91,15 @@ def build_web_state(
     is_official_vendor: bool,
     generated_at: str,
     extra_notices: tuple[str, ...] = (),
+    inference_report: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if mode not in {"live-fetch", "m1-replay", "synthetic"}:
         raise ValueError(f"unsupported web-state mode: {mode}")
     portfolio = research_report["portfolio"]
     files = dataset_manifest["files"]
     latest_trade_date = str(files[0]["max_trade_date"])
-    as_of = str(research_report["as_of"])
+    as_of = str(dataset_manifest["as_of"])
+    ranking_source = inference_report if inference_report is not None else research_report
 
     notices: list[str] = []
     if not is_official_vendor:
@@ -76,7 +111,7 @@ def build_web_state(
     notices.extend(extra_notices)
 
     rankings = []
-    for item in research_report["recommendations"]:
+    for item in ranking_source["recommendations"]:
         rankings.append(
             {
                 "symbol": item["symbol"],
@@ -85,7 +120,9 @@ def build_web_state(
                 "recommendation": item["recommendation"],
                 "rank_strength": item["rank_strength"],
                 "price_band": item["price_band"],
-                "factors": [dict(factor) for factor in research_report["feature_weights"]],
+                "factors": [
+                    dict(factor) for factor in ranking_source["feature_weights"]
+                ],
                 "risk_notes": list(item["risk_notes"]),
             }
         )
@@ -145,7 +182,7 @@ def build_web_state(
             "validation_ic_mean": research_report["validation_ic_mean"],
             "signal_sequence": sequence,
             "signal_state": latest_signal["state"] if latest_signal else "UNAVAILABLE",
-            "dataset_id": research_report["dataset_id"],
+            "dataset_id": str(dataset_manifest["dataset_id"]),
         },
         "rankings": rankings,
         "portfolio": {
@@ -187,36 +224,128 @@ def build_web_state(
     return document
 
 
+def _read_pointer(path: Path) -> dict[str, Any] | None:
+    path = Path(path)
+    if not path.is_file():
+        return None
+    return _load_json_object(path)
+
+
+def _write_json_file(path: Path, document: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(document, ensure_ascii=True, indent=2) + "\n")
+    os.replace(temporary, path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Assemble the web-state document")
     parser.add_argument("--research-report", required=True)
     parser.add_argument("--dataset-manifest", required=True)
+    parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--champion", required=True)
     parser.add_argument("--runs-root", required=True)
     parser.add_argument("--head-path", required=True)
     parser.add_argument("--mode", required=True, choices=["live-fetch", "m1-replay", "synthetic"])
     parser.add_argument("--is-official-vendor", action="store_true")
     parser.add_argument("--generated-at", required=True)
+    parser.add_argument("--cycle-id", required=True)
+    parser.add_argument("--active-pointer", default="")
+    parser.add_argument("--cycle-status-out", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--inference-report", default="")
     parser.add_argument("--notice", action="append", default=[])
     args = parser.parse_args(argv)
 
+    from .datasets import load_snapshot
+
+    manifest = _load_json_object(Path(args.dataset_manifest))
+    research_report = _load_json_object(Path(args.research_report))
+    champion = _load_json_object(Path(args.champion))
+    as_of = str(research_report["as_of"])
+    snapshot = load_snapshot(
+        manifest=manifest,
+        dataset_root=Path(args.dataset_root),
+        as_of=datetime.strptime(as_of, "%Y-%m-%d").date(),
+    )
+    pointer = _read_pointer(Path(args.active_pointer)) if args.active_pointer else None
+    active_champion_sha256 = (
+        str(pointer["champion_sha256"]) if pointer is not None else None
+    )
+    latest_signal = _read_latest_signal(Path(args.runs_root), Path(args.head_path))
+    binding = verify_signal_binding(
+        latest_signal=latest_signal,
+        as_of=as_of,
+        current_snapshot_sha256=snapshot.snapshot_sha256,
+        active_champion_sha256=active_champion_sha256,
+    )
+
+    previous_status = _read_pointer(Path(args.cycle_status_out))
+    last_good = {
+        "last_good_cycle_id": None,
+        "last_good_signal_id": None,
+        "last_good_as_of": None,
+    }
+    if previous_status is not None and previous_status.get("cycle_status") == CYCLE_CURRENT:
+        last_good = {
+            "last_good_cycle_id": previous_status.get("cycle_id"),
+            "last_good_signal_id": previous_status.get("last_good_signal_id"),
+            "last_good_as_of": previous_status.get("last_good_as_of"),
+        }
+
+    if binding:
+        status = CYCLE_UNAVAILABLE if binding == ["NO_SIGNAL"] else CYCLE_STALE
+        _write_json_file(
+            Path(args.cycle_status_out),
+            {
+                "status_id": "cycle-status/v1",
+                "cycle_id": args.cycle_id,
+                "cycle_status": status,
+                "errors": binding,
+                **last_good,
+                "updated_at": args.generated_at,
+            },
+        )
+        json.dump(
+            {"cycle_id": args.cycle_id, "cycle_status": status, "errors": binding},
+            sys.stdout,
+            ensure_ascii=True,
+        )
+        sys.stdout.write("\n")
+        return 3
+
     document = build_web_state(
-        research_report=_load_json_object(Path(args.research_report)),
-        dataset_manifest=_load_json_object(Path(args.dataset_manifest)),
-        champion=_load_json_object(Path(args.champion)),
-        latest_signal=_read_latest_signal(Path(args.runs_root), Path(args.head_path)),
+        research_report=research_report,
+        dataset_manifest=manifest,
+        champion=champion,
+        latest_signal=latest_signal,
         mode=args.mode,
         is_official_vendor=args.is_official_vendor,
         generated_at=args.generated_at,
         extra_notices=tuple(args.notice),
+        inference_report=(
+            _load_json_object(Path(args.inference_report)) if args.inference_report else None
+        ),
     )
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = out_path.with_name(f".{out_path.name}.tmp")
-    temporary.write_text(json.dumps(document, ensure_ascii=True, indent=2) + "\n")
-    os.replace(temporary, out_path)
-    json.dump({"out": str(out_path), "state_id": document["state_id"]}, sys.stdout)
+    _write_json_file(Path(args.out), document)
+    _write_json_file(
+        Path(args.cycle_status_out),
+        {
+            "status_id": "cycle-status/v1",
+            "cycle_id": args.cycle_id,
+            "cycle_status": CYCLE_CURRENT,
+            "errors": [],
+            "last_good_cycle_id": args.cycle_id,
+            "last_good_signal_id": str(latest_signal["signal_id"]),
+            "last_good_as_of": as_of,
+            "updated_at": args.generated_at,
+        },
+    )
+    json.dump(
+        {"out": str(args.out), "state_id": document["state_id"], "cycle_id": args.cycle_id},
+        sys.stdout,
+        ensure_ascii=True,
+    )
     sys.stdout.write("\n")
     return 0
 

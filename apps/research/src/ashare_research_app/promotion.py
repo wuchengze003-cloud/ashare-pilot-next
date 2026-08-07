@@ -1,11 +1,16 @@
-"""Promote the trained baseline model into immutable champion artifacts.
+"""Promote the trained baseline model into a frozen Champion Package.
 
-Outputs (all under an explicit runtime root, never in Git):
-  - runtime contract documents (universe, cost, market rules, execution,
-    portfolio risk) for the pilot;
-  - one content-addressed strategy adapter package embedding the model
-    bundle;
-  - one Champion 3.0 document binding every contract hash.
+Two strictly separate lifecycle actions live here:
+
+* :func:`promote_baseline_model` creates an immutable Champion Package
+  (champion contract, runtime contracts, trusted adapter, model bundle,
+  promotion receipt) under ``runtime/champions/<champion_id>/``.
+  Creation is atomic and idempotent: identical content returns the
+  existing package; different content under the same id fails.
+* :func:`activate_champion` flips the small ``active-champion.json``
+  pointer after re-verifying schema and hash bindings.
+
+Live inference must never call these; it only reads the active pointer.
 """
 
 from __future__ import annotations
@@ -13,6 +18,8 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
+import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -170,6 +177,10 @@ def build_strategy(config: Mapping[str, object]) -> BaselineMLStrategy:
 '''
 
 
+class ChampionPackageError(ValueError):
+    """Raised when a frozen champion package cannot be created or verified."""
+
+
 def canonical_json_bytes(document: Mapping[str, Any]) -> bytes:
     return json.dumps(document, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
 
@@ -239,16 +250,6 @@ def load_pilot_cost_model(repository_root: Path) -> dict[str, Any]:
     return document
 
 
-@dataclass(frozen=True)
-class PromotionPaths:
-    runtime_root: Path
-    contracts_dir: Path
-    adapter_root: Path
-    champion_path: Path
-    promotion_report_path: Path
-    model_bundle_path: Path
-
-
 def _generate_adapter_source(feature_names: tuple[str, ...]) -> str:
     return ADAPTER_SOURCE_TEMPLATE.format(
         feature_names=repr(feature_names),
@@ -258,6 +259,21 @@ def _generate_adapter_source(feature_names: tuple[str, ...]) -> str:
         strategy_id=STRATEGY_ID,
         strategy_version=STRATEGY_VERSION,
     )
+
+
+@dataclass(frozen=True)
+class PromotionPaths:
+    runtime_root: Path
+    champions_dir: Path
+    package_dir: Path
+    contracts_dir: Path
+    adapter_root: Path
+    champion_path: Path
+    receipt_path: Path
+    promotion_report_path: Path
+    model_bundle_path: Path
+    champion_id: str
+    champion_sha256: str
 
 
 def promote_baseline_model(
@@ -274,13 +290,9 @@ def promote_baseline_model(
     per_weight: float,
     feature_names: tuple[str, ...],
 ) -> PromotionPaths:
-    """Write champion, adapter package, and runtime contracts atomically."""
+    """Create one immutable Champion Package; idempotent for identical content."""
     repository_root = Path(repository_root)
     runtime_root = Path(runtime_root)
-    contracts_dir = runtime_root / "contracts"
-    adapter_root = runtime_root / "adapters"
-    package_dir = adapter_root.joinpath(*ADAPTER_ID.split("/"))
-
     if generated_at.tzinfo is None or generated_at.utcoffset().total_seconds() != 0:
         raise ValueError("promoted_at must be timezone-aware UTC")
     generated_text = generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
@@ -295,29 +307,17 @@ def promote_baseline_model(
         generated_at=generated_text,
         dataset_manifest=dataset_manifest,
     )
-    _write_json(contracts_dir / "cost-model.json", cost_model)
-    _write_json(contracts_dir / "market-rules.json", market_rules)
-    _write_json(contracts_dir / "execution-policy.json", execution_policy)
-    _write_json(contracts_dir / "portfolio-risk.json", portfolio_risk)
-    _write_json(contracts_dir / "universe.json", universe)
-    _write_json(contracts_dir / "dataset-manifest.json", dict(dataset_manifest))
 
     model_bundle_sha256 = hashlib.sha256(model_bundle_bytes).hexdigest()
-    package_dir.mkdir(parents=True, exist_ok=True)
-    model_bundle_path = package_dir / "model.bundle"
-    model_bundle_path.write_bytes(model_bundle_bytes)
-
     adapter_source = _generate_adapter_source(feature_names)
     adapter_code_bytes = adapter_source.encode()
     config_document = {
-        "model_bundle_file": "model.bundle",
+        "model_bundle_file": "../../../model/model.bundle",
         "model_bundle_sha256": model_bundle_sha256,
         "top_k": top_k,
         "per_weight": per_weight,
     }
     config_bytes = canonical_json_bytes(config_document) + b"\n"
-    (package_dir / "adapter.py").write_bytes(adapter_code_bytes)
-    (package_dir / "config.json").write_bytes(config_bytes)
     code_sha256 = hashlib.sha256(adapter_code_bytes).hexdigest()
     config_sha256 = hashlib.sha256(config_bytes).hexdigest()
     package_sha256 = canonical_json_sha256(
@@ -343,7 +343,6 @@ def promote_baseline_model(
         "config_sha256": config_sha256,
         "package_sha256": package_sha256,
     }
-    _write_json(package_dir / "adapter.json", adapter_manifest)
 
     lockfile = repository_root / "uv.lock"
     lockfile_sha256 = hashlib.sha256(lockfile.read_bytes()).hexdigest()
@@ -384,6 +383,22 @@ def promote_baseline_model(
     promotion_report_path = runtime_root / "promotion-report.json"
     _write_json(promotion_report_path, promotion_report)
 
+    fixed_contract_set = {
+        "cost_model_sha256": canonical_json_sha256(cost_model),
+        "market_rules_sha256": canonical_json_sha256(market_rules),
+        "execution_policy_sha256": canonical_json_sha256(execution_policy),
+        "portfolio_risk_sha256": canonical_json_sha256(portfolio_risk),
+        "code_sha256": code_sha256,
+        "config_sha256": config_sha256,
+        "lockfile_sha256": lockfile_sha256,
+    }
+    promotion_compatibility = {
+        "dataset_family_id": str(dataset_manifest["dataset_family_id"]),
+        "data_schema_sha256": str(dataset_manifest["data_schema_sha256"]),
+        "normalization_version": str(dataset_manifest["normalization_version"]),
+        "universe_policy_id": UNIVERSE_POLICY_ID,
+        "universe_policy_version": UNIVERSE_POLICY_VERSION,
+    }
     champion = {
         "contract_id": "champion",
         "schema_version": "3.0.0",
@@ -392,39 +407,175 @@ def promote_baseline_model(
         "adapter_id": ADAPTER_ID,
         "adapter_sha256": package_sha256,
         "promoted_at": generated_text,
-        "promotion_compatibility": {
-            "dataset_family_id": str(dataset_manifest["dataset_family_id"]),
-            "data_schema_sha256": str(dataset_manifest["data_schema_sha256"]),
-            "normalization_version": str(dataset_manifest["normalization_version"]),
-            "universe_policy_id": UNIVERSE_POLICY_ID,
-            "universe_policy_version": UNIVERSE_POLICY_VERSION,
-        },
+        "promotion_compatibility": promotion_compatibility,
         "promotion_evidence": {
             "dataset_manifest_sha256": canonical_json_sha256(dict(dataset_manifest)),
             "dataset_snapshot_sha256": report.snapshot_sha256,
             "universe_snapshot_sha256": universe_snapshot.snapshot_sha256,
         },
-        "fixed_contract_set": {
-            "cost_model_sha256": canonical_json_sha256(cost_model),
-            "market_rules_sha256": canonical_json_sha256(market_rules),
-            "execution_policy_sha256": canonical_json_sha256(execution_policy),
-            "portfolio_risk_sha256": canonical_json_sha256(portfolio_risk),
-            "code_sha256": code_sha256,
-            "config_sha256": config_sha256,
-            "lockfile_sha256": lockfile_sha256,
-        },
+        "fixed_contract_set": fixed_contract_set,
         "promotion_report_sha256": canonical_json_sha256(promotion_report),
     }
     champion_schema = _load_schema(repository_root, "champion")
     Draft202012Validator(champion_schema, format_checker=FormatChecker()).validate(champion)
-    champion_path = contracts_dir / "champion.json"
-    _write_json(champion_path, champion)
+    champion_bytes = canonical_json_bytes(champion) + b"\n"
+    champion_sha256 = canonical_json_sha256(champion)
+
+    champion_id = "champ-" + hashlib.sha256(
+        canonical_json_bytes(
+            {
+                "adapter_sha256": package_sha256,
+                "fixed_contract_set": fixed_contract_set,
+                "promotion_compatibility": promotion_compatibility,
+                "promoted_at": generated_text,
+            }
+        )
+    ).hexdigest()[:20]
+
+    receipt = {
+        "receipt_id": "champion-promotion-receipt/v1",
+        "champion_id": champion_id,
+        "champion_sha256": champion_sha256,
+        "promotion_id": "promo-" + hashlib.sha256(champion_bytes).hexdigest()[:16],
+        "model_bundle_sha256": model_bundle_sha256,
+        "adapter_sha256": package_sha256,
+        "promoted_at": generated_text,
+        "dataset_id": report.dataset_id,
+        "snapshot_sha256": report.snapshot_sha256,
+        "training_cutoff": report.training_cutoff.isoformat(),
+        "production_training_cutoff": report.production_training_cutoff.isoformat(),
+        "promotion_report_sha256": canonical_json_sha256(promotion_report),
+    }
+
+    champions_dir = runtime_root / "champions"
+    package_dir = champions_dir / champion_id
+    contracts_dir = package_dir / "contracts"
+    adapter_dir = package_dir / "adapter" / Path(*ADAPTER_ID.split("/"))
+    model_dir = package_dir / "model"
+
+    if package_dir.exists():
+        existing = (package_dir / "champion.json").read_bytes()
+        same = existing == champion_bytes
+        same = same and (model_dir / "model.bundle").read_bytes() == model_bundle_bytes
+        same = same and (adapter_dir / "adapter.py").read_bytes() == adapter_code_bytes
+        same = same and (adapter_dir / "config.json").read_bytes() == config_bytes
+        if not same:
+            raise ChampionPackageError(
+                f"champion package {champion_id} exists with different content"
+            )
+    else:
+        champions_dir.mkdir(parents=True, exist_ok=True)
+        temporary = champions_dir / f".{champion_id}.tmp"
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        try:
+            _write_json(temporary / "champion.json", champion)
+            _write_json(temporary / "promotion-receipt.json", receipt)
+            _write_json(temporary / "contracts" / "cost-model.json", cost_model)
+            _write_json(temporary / "contracts" / "market-rules.json", market_rules)
+            _write_json(temporary / "contracts" / "execution-policy.json", execution_policy)
+            _write_json(temporary / "contracts" / "portfolio-risk.json", portfolio_risk)
+            _write_json(temporary / "contracts" / "universe.json", universe)
+            _write_json(
+                temporary / "contracts" / "dataset-manifest.json", dict(dataset_manifest)
+            )
+            _write_json(temporary / "adapter" / Path(*ADAPTER_ID.split("/")) / "adapter.json",
+                        adapter_manifest)
+            (temporary / "adapter" / Path(*ADAPTER_ID.split("/"))).mkdir(
+                parents=True, exist_ok=True
+            )
+            (temporary / "adapter" / Path(*ADAPTER_ID.split("/")) / "adapter.py").write_bytes(
+                adapter_code_bytes
+            )
+            (temporary / "adapter" / Path(*ADAPTER_ID.split("/")) / "config.json").write_bytes(
+                config_bytes
+            )
+            (temporary / "model").mkdir(parents=True, exist_ok=True)
+            (temporary / "model" / "model.bundle").write_bytes(model_bundle_bytes)
+            os.replace(temporary, package_dir)
+        except BaseException:
+            shutil.rmtree(temporary, ignore_errors=True)
+            raise
 
     return PromotionPaths(
         runtime_root=runtime_root,
+        champions_dir=champions_dir,
+        package_dir=package_dir,
         contracts_dir=contracts_dir,
-        adapter_root=adapter_root,
-        champion_path=champion_path,
+        adapter_root=package_dir / "adapter",
+        champion_path=package_dir / "champion.json",
+        receipt_path=package_dir / "promotion-receipt.json",
         promotion_report_path=promotion_report_path,
-        model_bundle_path=model_bundle_path,
+        model_bundle_path=model_dir / "model.bundle",
+        champion_id=champion_id,
+        champion_sha256=champion_sha256,
     )
+
+
+def load_active_champion(runtime_root: Path) -> dict[str, Any] | None:
+    pointer_path = Path(runtime_root) / "active-champion.json"
+    if not pointer_path.is_file():
+        return None
+    document = json.loads(pointer_path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ChampionPackageError("active champion pointer must be an object")
+    return document
+
+
+def activate_champion(
+    *,
+    runtime_root: Path,
+    champion_id: str,
+    activated_at: datetime,
+) -> dict[str, Any]:
+    """Verify a frozen package, then atomically flip the active pointer."""
+    runtime_root = Path(runtime_root)
+    if activated_at.tzinfo is None or activated_at.utcoffset().total_seconds() != 0:
+        raise ValueError("activated_at must be timezone-aware UTC")
+    package_dir = runtime_root / "champions" / champion_id
+    if not package_dir.is_dir():
+        raise ChampionPackageError(f"champion package does not exist: {champion_id}")
+    champion = json.loads((package_dir / "champion.json").read_text(encoding="utf-8"))
+    receipt = json.loads((package_dir / "promotion-receipt.json").read_text(encoding="utf-8"))
+    if receipt.get("champion_id") != champion_id:
+        raise ChampionPackageError("receipt champion_id does not match package")
+
+    adapter_dir = package_dir / "adapter" / Path(*str(champion["adapter_id"]).split("/"))
+    manifest = json.loads((adapter_dir / "adapter.json").read_text(encoding="utf-8"))
+    code_bytes = (adapter_dir / "adapter.py").read_bytes()
+    config_bytes = (adapter_dir / "config.json").read_bytes()
+    if hashlib.sha256(code_bytes).hexdigest() != manifest["code_sha256"]:
+        raise ChampionPackageError("adapter code hash mismatch in frozen package")
+    if hashlib.sha256(config_bytes).hexdigest() != manifest["config_sha256"]:
+        raise ChampionPackageError("adapter config hash mismatch in frozen package")
+    expected_package = canonical_json_sha256(
+        {
+            "adapter_id": manifest["adapter_id"],
+            "strategy_id": manifest["strategy_id"],
+            "strategy_version": manifest["strategy_version"],
+            "entrypoint": manifest["entrypoint"],
+            "code_sha256": manifest["code_sha256"],
+            "config_sha256": manifest["config_sha256"],
+        }
+    )
+    if expected_package != manifest["package_sha256"]:
+        raise ChampionPackageError("adapter package sha mismatch in frozen package")
+    if manifest["package_sha256"] != champion["adapter_sha256"]:
+        raise ChampionPackageError("champion adapter_sha256 does not match adapter manifest")
+    bundle_bytes = (package_dir / "model" / "model.bundle").read_bytes()
+    if hashlib.sha256(bundle_bytes).hexdigest() != receipt["model_bundle_sha256"]:
+        raise ChampionPackageError("model bundle hash mismatch in frozen package")
+
+    pointer = {
+        "pointer_id": "active-champion/v1",
+        "champion_id": champion_id,
+        "champion_sha256": canonical_json_sha256(champion),
+        "activated_at": activated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "promotion_id": str(receipt["promotion_id"]),
+    }
+    pointer_path = runtime_root / "active-champion.json"
+    pointer_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = pointer_path.with_name(f".{pointer_path.name}.tmp")
+    temporary.write_bytes(canonical_json_bytes(pointer) + b"\n")
+    os.replace(temporary, pointer_path)
+    return pointer

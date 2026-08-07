@@ -58,6 +58,7 @@
   <span class="pill" id="model-info">模型：加载中</span>
   <span class="pill warn">模拟组合 · 仅目标仓位建议 · 不构成投资意见</span>
 </header>
+<div id="cycle-banner" class="banner" style="display:none"></div>
 <div id="banner" class="banner" style="display:none"></div>
 <main>
   <section>
@@ -240,14 +241,32 @@ function renderMetrics(state) {
 }
 
 async function refresh() {
-  const [state, market, err] = await Promise.all([
+  const [state, market, err, cycle] = await Promise.all([
     fetchJson("/api/web-state"), fetchJson("/api/market"), fetchJson("/api/refresh-error"),
+    fetchJson("/api/cycle-status"),
   ]);
+  renderCycle(cycle, err);
   renderMarket(market, state);
   renderBanner(state, err);
   if (!state) return;
   renderPortfolio(state); renderNav(state); renderRankings(state);
   renderPositions(state); renderActions(state); renderMetrics(state);
+}
+
+function renderCycle(cycle, err) {
+  const banner = $("cycle-banner");
+  const problems = [];
+  if (cycle && cycle.cycle_status && cycle.cycle_status !== "CURRENT") {
+    const lastGood = cycle.last_good_as_of
+      ? `；展示最后正常周期 ${cycle.last_good_cycle_id || "?"}（as_of ${cycle.last_good_as_of}）`
+      : "";
+    problems.push(`本轮 ${cycle.cycle_id} 状态 ${cycle.cycle_status}` +
+      `（${(cycle.errors || []).join("、") || "未知错误"}）${lastGood}`);
+  }
+  if (err && err.error) problems.push(`刷新失败（${err.error}）：${err.detail || ""}`);
+  if (!problems.length) { banner.style.display = "none"; return; }
+  banner.style.display = "block";
+  banner.textContent = "⚠ " + problems.join(" ｜ ");
 }
 refresh();
 setInterval(refresh, 15000);
