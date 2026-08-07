@@ -1,8 +1,14 @@
-"""One-command live pilot orchestrator.
+"""One-command pilot orchestrator with separated lifecycles.
 
-Ops role only: invokes public application commands as subprocesses,
-serves nothing itself, and contains no financial semantics. May read
-the wall clock because Ops is outside the deterministic core.
+Bootstrap (startup only, synthetic/m1-replay modes): create the demo
+dataset and, when no active champion exists, run one explicit Research
+promotion + activation. Live mode never trains or promotes.
+
+Every refresh cycle is inference-only: acquire/read dataset, frozen
+inference scoring, production signal from the active frozen champion,
+and web state with binding verification. Failures keep the last known
+good page and record an explicit DEGRADED/STALE cycle status; the
+failure marker is cleared only when a cycle fully succeeds.
 """
 
 from __future__ import annotations
@@ -36,21 +42,15 @@ def _write_json(path: Path, document: dict) -> None:
     temporary.replace(path)
 
 
-def _fail(runtime_web: Path, error: str, detail: str) -> None:
-    _write_json(
-        runtime_web / "refresh-error.json",
-        {
-            "error": error,
-            "detail": detail[-500:],
-            "failed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        },
-    )
-
-
-def _clear_failure(runtime_web: Path) -> None:
-    failure = runtime_web / "refresh-error.json"
-    if failure.is_file():
-        failure.unlink()
+def _read_json(path: Path) -> dict | None:
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
 
 
 def discover_m1_dataset() -> tuple[Path, Path]:
@@ -103,16 +103,88 @@ def refresh_market_sidecar(runtime_web: Path) -> None:
     _write_json(runtime_web / "market.json", document)
 
 
-def run_cycle(args, runtime_pilot: Path, runtime_web: Path) -> bool:
-    generated_at = datetime.now(UTC)
-    generated_text = generated_at.isoformat().replace("+00:00", "Z")
-    stamp = generated_at.strftime("%Y%m%dT%H%M%S")
-    python = sys.executable
+def _last_good_from(previous: dict | None) -> dict:
+    if previous is not None and previous.get("cycle_status") == "CURRENT":
+        return {
+            "last_good_cycle_id": previous.get("cycle_id"),
+            "last_good_signal_id": previous.get("last_good_signal_id"),
+            "last_good_as_of": previous.get("last_good_as_of"),
+        }
+    return {
+        "last_good_cycle_id": None,
+        "last_good_signal_id": None,
+        "last_good_as_of": None,
+    }
 
+
+def fail_cycle(
+    runtime_web: Path,
+    *,
+    cycle_id: str,
+    generated_text: str,
+    error: str,
+    detail: str = "",
+) -> None:
+    status_path = runtime_web / "cycle-status.json"
+    previous = _read_json(status_path)
+    _write_json(
+        status_path,
+        {
+            "status_id": "cycle-status/v1",
+            "cycle_id": cycle_id,
+            "cycle_status": "DEGRADED",
+            "errors": [error] + ([detail[-300:]] if detail else []),
+            **_last_good_from(previous),
+            "updated_at": generated_text,
+        },
+    )
+
+
+def run_research_activate(
+    args: argparse.Namespace,
+    runtime_pilot: Path,
+    dataset: dict,
+    generated_text: str,
+) -> bool:
+    """Explicit model-change action; only called from bootstrap."""
+    result = _run(
+        [
+            sys.executable,
+            "-m",
+            "ashare_research_app.pilot_research",
+            "--dataset-manifest",
+            str(dataset["manifest"]),
+            "--dataset-root",
+            str(dataset["root"]),
+            "--repository-root",
+            str(REPO_ROOT),
+            "--runtime-root",
+            str(runtime_pilot),
+            "--generated-at",
+            generated_text,
+            "--top-k",
+            str(args.top_k),
+            "--per-weight",
+            str(args.per_weight),
+            "--initial-capital",
+            str(args.initial_capital),
+            "--activate",
+        ]
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def bootstrap(
+    args: argparse.Namespace,
+    runtime_pilot: Path,
+    runtime_web: Path,
+    generated_text: str,
+) -> dict | None:
+    pointer = runtime_pilot / "active-champion.json"
     if args.mode == "synthetic":
         synthetic = _run(
             [
-                python,
+                sys.executable,
                 "-m",
                 "ashare_research_app.synthetic_demo",
                 "--out-dir",
@@ -120,15 +192,69 @@ def run_cycle(args, runtime_pilot: Path, runtime_web: Path) -> bool:
             ]
         )
         if synthetic.returncode != 0 or not synthetic.stdout.strip():
-            _fail(runtime_web, "SYNTHETIC_FAILED", synthetic.stderr[-500:])
-            return False
+            fail_cycle(
+                runtime_web,
+                cycle_id="bootstrap",
+                generated_text=generated_text,
+                error="SYNTHETIC_FAILED",
+                detail=synthetic.stderr,
+            )
+            raise SystemExit(1)
         generated = json.loads(synthetic.stdout)
-        manifest_path = Path(str(generated["manifest_path"]))
-        dataset_root = Path(str(generated["dataset_dir"]))
-        is_official = False
-        mode = "synthetic"
-    elif args.mode == "live":
-        symbols = args.symbols
+        dataset = {
+            "manifest": Path(generated["manifest_path"]),
+            "root": Path(generated["dataset_dir"]),
+            "as_of": generated["as_of"],
+            "official": False,
+            "web_mode": "synthetic",
+        }
+        if not pointer.is_file() and not run_research_activate(
+            args, runtime_pilot, dataset, generated_text
+        ):
+            fail_cycle(
+                runtime_web,
+                cycle_id="bootstrap",
+                generated_text=generated_text,
+                error="PROMOTION_FAILED",
+            )
+            raise SystemExit(1)
+        return dataset
+    if args.mode == "m1-replay":
+        manifest_path, dataset_dir = discover_m1_dataset()
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        dataset = {
+            "manifest": manifest_path,
+            "root": dataset_dir,
+            "as_of": str(manifest["as_of"]),
+            "official": manifest.get("source") == "tushare-official",
+            "web_mode": "m1-replay",
+        }
+        if not pointer.is_file() and not run_research_activate(
+            args, runtime_pilot, dataset, generated_text
+        ):
+            fail_cycle(
+                runtime_web,
+                cycle_id="bootstrap",
+                generated_text=generated_text,
+                error="PROMOTION_FAILED",
+            )
+            raise SystemExit(1)
+        return dataset
+    return None  # live mode: dataset acquired per cycle; never train here
+
+
+def run_cycle(
+    args: argparse.Namespace,
+    runtime_pilot: Path,
+    runtime_web: Path,
+    dataset: dict | None,
+    cycle_id: str,
+    generated_text: str,
+    stamp: str,
+) -> bool:
+    python = sys.executable
+
+    if dataset is None:
         window_end = datetime.now(CN_TZ).date()
         window_start = window_end - timedelta(days=args.lookback_days)
         acquire = _run(
@@ -137,7 +263,7 @@ def run_cycle(args, runtime_pilot: Path, runtime_web: Path) -> bool:
                 "-m",
                 "ashare_data_gateway.pilot_acquire",
                 "--symbols",
-                symbols,
+                args.symbols,
                 "--window-start",
                 window_start.isoformat(),
                 "--window-end",
@@ -153,51 +279,60 @@ def run_cycle(args, runtime_pilot: Path, runtime_web: Path) -> bool:
                 payload = json.loads(acquire.stdout or "{}")
             except ValueError:
                 payload = {}
-            _fail(
+            fail_cycle(
                 runtime_web,
-                str(payload.get("error", "ACQUIRE_FAILED")),
-                str(payload.get("detail", acquire.stderr[-300:])),
+                cycle_id=cycle_id,
+                generated_text=generated_text,
+                error=str(payload.get("error", "DATASET_FAILED")),
+                detail=str(payload.get("detail", acquire.stderr)),
             )
             return False
         acquired = json.loads(acquire.stdout)
-        manifest_path = Path(str(acquired["manifest_path"]))
-        dataset_root = Path(str(acquired["dataset_dir"]))
-        is_official = bool(acquired["is_official_vendor"])
-        mode = "live-fetch"
-    else:
-        manifest_path, dataset_root = discover_m1_dataset()
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        is_official = manifest.get("source") == "tushare-official"
-        mode = "m1-replay"
+        manifest = json.loads(
+            Path(str(acquired["manifest_path"])).read_text(encoding="utf-8")
+        )
+        dataset = {
+            "manifest": Path(str(acquired["manifest_path"])),
+            "root": Path(str(acquired["dataset_dir"])),
+            "as_of": str(manifest["as_of"]),
+            "official": bool(acquired["is_official_vendor"]),
+            "web_mode": "live-fetch",
+        }
 
-    research = _run(
+    inference = _run(
         [
             python,
             "-m",
-            "ashare_research_app.pilot_research",
-            "--dataset-manifest",
-            str(manifest_path),
-            "--dataset-root",
-            str(dataset_root),
-            "--repository-root",
-            str(REPO_ROOT),
+            "ashare_research_app.frozen_inference",
             "--runtime-root",
             str(runtime_pilot),
-            "--generated-at",
-            generated_text,
+            "--dataset-manifest",
+            str(dataset["manifest"]),
+            "--dataset-root",
+            str(dataset["root"]),
             "--top-k",
             str(args.top_k),
-            "--per-weight",
-            str(args.per_weight),
-            "--initial-capital",
-            str(args.initial_capital),
+            "--out",
+            str(runtime_web / "inference-report.json"),
         ]
     )
-    if research.returncode != 0 or not research.stdout.strip():
-        _fail(runtime_web, "RESEARCH_FAILED", research.stderr[-500:])
+    if inference.returncode == 4:
+        fail_cycle(
+            runtime_web,
+            cycle_id=cycle_id,
+            generated_text=generated_text,
+            error="NO_ACTIVE_CHAMPION",
+        )
         return False
-    research_result = json.loads(research.stdout)
-    as_of = str(research_result["as_of"])
+    if inference.returncode != 0:
+        fail_cycle(
+            runtime_web,
+            cycle_id=cycle_id,
+            generated_text=generated_text,
+            error="INFERENCE_FAILED",
+            detail=inference.stderr,
+        )
+        return False
 
     git_sha = _run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"]).stdout.strip()
     signal_run = _run(
@@ -205,18 +340,16 @@ def run_cycle(args, runtime_pilot: Path, runtime_web: Path) -> bool:
             python,
             "-m",
             "ashare_signal_runner.pilot_run",
-            "--contracts-dir",
-            str(research_result["contracts_dir"]),
-            "--adapter-root",
-            str(research_result["adapter_root"]),
+            "--runtime-root",
+            str(runtime_pilot),
             "--dataset-root",
-            str(dataset_root),
+            str(dataset["root"]),
             "--runs-root",
             str(runtime_pilot / "runs"),
             "--head-path",
             str(runtime_pilot / "current-signal-head.json"),
             "--as-of",
-            as_of,
+            str(dataset["as_of"]),
             "--generated-at",
             generated_text,
             "--signal-id",
@@ -227,9 +360,28 @@ def run_cycle(args, runtime_pilot: Path, runtime_web: Path) -> bool:
             git_sha,
         ]
     )
-    if signal_run.returncode != 0:
-        _fail(runtime_web, "SIGNAL_DEGRADED", signal_run.stderr[-500:])
+    if signal_run.returncode == 4:
+        fail_cycle(
+            runtime_web,
+            cycle_id=cycle_id,
+            generated_text=generated_text,
+            error="NO_ACTIVE_CHAMPION",
+        )
+        return False
+    if signal_run.returncode != 0 or not signal_run.stdout.strip():
+        fail_cycle(
+            runtime_web,
+            cycle_id=cycle_id,
+            generated_text=generated_text,
+            error="SIGNAL_FAILED",
+            detail=signal_run.stderr,
+        )
+        return False
 
+    pointer = _read_json(runtime_pilot / "active-champion.json")
+    champion_path = (
+        runtime_pilot / "champions" / str(pointer["champion_id"]) / "champion.json"
+    )
     state_arguments = [
         python,
         "-m",
@@ -237,34 +389,47 @@ def run_cycle(args, runtime_pilot: Path, runtime_web: Path) -> bool:
         "--research-report",
         str(runtime_pilot / "research-report.json"),
         "--dataset-manifest",
-        str(manifest_path),
+        str(dataset["manifest"]),
+        "--dataset-root",
+        str(dataset["root"]),
         "--champion",
-        str(research_result["champion_path"]),
+        str(champion_path),
         "--runs-root",
         str(runtime_pilot / "runs"),
         "--head-path",
         str(runtime_pilot / "current-signal-head.json"),
         "--mode",
-        mode,
+        str(dataset["web_mode"]),
         "--generated-at",
         generated_text,
+        "--cycle-id",
+        cycle_id,
+        "--active-pointer",
+        str(runtime_pilot / "active-champion.json"),
+        "--cycle-status-out",
+        str(runtime_web / "cycle-status.json"),
+        "--inference-report",
+        str(runtime_web / "inference-report.json"),
         "--out",
         str(runtime_web / "live-state.json"),
     ]
-    if is_official:
+    if dataset["official"]:
         state_arguments.append("--is-official-vendor")
     state_result = _run(state_arguments)
     if state_result.returncode != 0:
-        _fail(runtime_web, "WEB_STATE_FAILED", state_result.stderr[-500:])
+        if state_result.returncode != 3:
+            fail_cycle(
+                runtime_web,
+                cycle_id=cycle_id,
+                generated_text=generated_text,
+                error="WEB_STATE_FAILED",
+                detail=state_result.stderr,
+            )
         return False
 
-    report = json.loads((runtime_pilot / "research-report.json").read_text(encoding="utf-8"))
-    calendar_days = sorted({str(point["trade_date"]) for point in report["nav_curve"]} | {as_of})
-    calendar_path = runtime_web / "calendar.json"
-    temporary = calendar_path.with_name(f".{calendar_path.name}.tmp")
-    temporary.write_text(json.dumps(calendar_days, ensure_ascii=True) + "\n")
-    temporary.replace(calendar_path)
-    _clear_failure(runtime_web)
+    failure = runtime_web / "refresh-error.json"
+    if failure.is_file():
+        failure.unlink()
     return True
 
 
@@ -297,8 +462,26 @@ def main() -> int:
     runtime_web = runtime_pilot / "web"
     runtime_web.mkdir(parents=True, exist_ok=True)
 
-    print(f"[ops] running initial cycle (mode={args.mode}) ...")
-    run_cycle(args, runtime_pilot, runtime_web)
+    generated_at = datetime.now(UTC)
+    generated_text = generated_at.isoformat().replace("+00:00", "Z")
+    stamp = generated_at.strftime("%Y%m%dT%H%M%S")
+
+    print(f"[ops] bootstrap (mode={args.mode}) ...")
+    dataset = bootstrap(args, runtime_pilot, runtime_web, generated_text)
+    if dataset is not None:
+        report = _read_json(runtime_pilot / "research-report.json")
+        if report is not None:
+            calendar_days = sorted(
+                {str(point["trade_date"]) for point in report["nav_curve"]}
+                | {str(dataset["as_of"])}
+            )
+            (runtime_web / "calendar.json").write_text(
+                json.dumps(calendar_days, ensure_ascii=True) + "\n"
+            )
+
+    cycle_id = f"live-{stamp}"
+    print(f"[ops] cycle {cycle_id} ...")
+    run_cycle(args, runtime_pilot, runtime_web, dataset, cycle_id, generated_text, stamp)
     refresh_market_sidecar(runtime_web)
 
     server = subprocess.Popen(
@@ -313,6 +496,8 @@ def main() -> int:
             str(runtime_web / "market.json"),
             "--error-file",
             str(runtime_web / "refresh-error.json"),
+            "--cycle-status-file",
+            str(runtime_web / "cycle-status.json"),
             "--host",
             args.host,
             "--port",
@@ -330,9 +515,20 @@ def main() -> int:
             if now - last_market >= 30:
                 refresh_market_sidecar(runtime_web)
                 last_market = now
-            if args.mode == "live" and now - last_cycle >= args.refresh_seconds:
-                print("[ops] refreshing live cycle ...")
-                run_cycle(args, runtime_pilot, runtime_web)
+            if now - last_cycle >= args.refresh_seconds:
+                cycle_generated = datetime.now(UTC)
+                cycle_text = cycle_generated.isoformat().replace("+00:00", "Z")
+                cycle_stamp = cycle_generated.strftime("%Y%m%dT%H%M%S")
+                print(f"[ops] cycle live-{cycle_stamp} ...")
+                run_cycle(
+                    args,
+                    runtime_pilot,
+                    runtime_web,
+                    dataset,
+                    f"live-{cycle_stamp}",
+                    cycle_text,
+                    cycle_stamp,
+                )
                 last_cycle = now
     except KeyboardInterrupt:
         pass
