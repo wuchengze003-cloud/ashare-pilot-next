@@ -1,13 +1,19 @@
 """Public command: inference-only scoring with the active frozen champion.
 
 Loads the active champion's model bundle and scores the current
-point-in-time snapshot. This command never trains, fits, tunes,
-promotes, or creates champions; it is the live-side ranking producer.
+point-in-time snapshot, and derives the current-cycle universe from the
+current dataset. This command never trains, fits, tunes, promotes, or
+creates champions; it is the live-side ranking producer.
+
+Strategy parameters (top_k / per_weight) are read from the frozen
+champion's adapter config so a live caller cannot drift an activated
+champion's semantics.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime
@@ -18,9 +24,10 @@ import numpy as np
 from .baseline_model import MultiHorizonModel
 from .datasets import load_snapshot
 from .features import FEATURE_NAMES, build_feature_panel
+from .promotion import build_universe_document
 
 EXIT_NO_ACTIVE_CHAMPION = 4
-ADAPTER_ID = "ml-baseline-adapter/v1"
+EXIT_TOP_K_OVERRIDE_REJECTED = 5
 
 
 def _load_json_object(path: Path) -> dict:
@@ -28,6 +35,12 @@ def _load_json_object(path: Path) -> dict:
     if not isinstance(document, dict):
         raise ValueError(f"document must be an object: {path}")
     return document
+
+
+def _canonical_sha256(document: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(document, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
 
 
 def _rank_correlation(x: list[float], y: list[float]) -> float:
@@ -50,24 +63,49 @@ def _rank_correlation(x: list[float], y: list[float]) -> float:
     return covariance / (var_x * var_y) ** 0.5
 
 
-def score_frozen_champion(
-    *,
-    runtime_root: Path,
-    manifest: dict,
-    dataset_root: Path,
-    top_k: int,
-) -> dict:
+def _load_frozen_package(runtime_root: Path) -> tuple[dict, dict, dict, bytes]:
+    """Return (pointer, champion, config, bundle_bytes) after integrity checks.
+
+    The trust chain flows from the activation pointer (outside the
+    package) through receipt_sha256 → champion_sha256 → model bundle
+    SHA → adapter config SHA.  Tampering any asset or hash that is
+    anchored in the pointer is detected.
+    """
     pointer_path = Path(runtime_root) / "active-champion.json"
     if not pointer_path.is_file():
         raise LookupError("NO_ACTIVE_CHAMPION")
     pointer = _load_json_object(pointer_path)
     package_dir = Path(runtime_root) / "champions" / str(pointer["champion_id"])
+    champion = _load_json_object(package_dir / "champion.json")
+    if _canonical_sha256(champion) != str(pointer["champion_sha256"]):
+        raise ValueError("active pointer champion hash does not match package champion")
     receipt = _load_json_object(package_dir / "promotion-receipt.json")
+    if _canonical_sha256(receipt) != str(pointer.get("receipt_sha256")):
+        raise ValueError("active pointer receipt hash does not match package receipt")
+    if str(receipt["champion_sha256"]) != _canonical_sha256(champion):
+        raise ValueError("promotion receipt champion hash does not match champion")
+    adapter_id = str(champion["adapter_id"])  # read from champion, not hardcoded
     config = _load_json_object(
-        package_dir / "adapter" / Path(*ADAPTER_ID.split("/")) / "config.json"
+        package_dir / "adapter" / Path(*adapter_id.split("/")) / "config.json"
     )
     bundle_bytes = (package_dir / "model" / "model.bundle").read_bytes()
+    bundle_sha = hashlib.sha256(bundle_bytes).hexdigest()
+    if bundle_sha != str(receipt["model_bundle_sha256"]):
+        raise ValueError("model bundle hash does not match promotion receipt")
+    if bundle_sha != str(config["model_bundle_sha256"]):
+        raise ValueError("model bundle hash does not match adapter config")
+    return pointer, champion, config, bundle_bytes
+
+
+def score_frozen_champion(
+    *,
+    runtime_root: Path,
+    manifest: dict,
+    dataset_root: Path,
+) -> dict:
+    pointer, champion, config, bundle_bytes = _load_frozen_package(runtime_root)
     model = MultiHorizonModel.from_bundle_bytes(bundle_bytes)
+    top_k = int(config["top_k"])
 
     as_of_text = str(manifest["as_of"])
     snapshot = load_snapshot(
@@ -107,9 +145,7 @@ def score_frozen_champion(
                 "rank": rank,
                 "score": round(score, 6),
                 "recommendation": recommendation,
-                "rank_strength": round(
-                    1.0 - (rank - 1) / max(number_of_symbols, 1), 4
-                ),
+                "rank_strength": round(1.0 - (rank - 1) / max(number_of_symbols, 1), 4),
                 "price_band": (
                     {"low": round(last_close * 0.98, 4), "high": round(last_close, 4)}
                     if recommendation == "BUY"
@@ -123,9 +159,7 @@ def score_frozen_champion(
     if matrix.size:
         for column, name in enumerate(FEATURE_NAMES):
             weight = abs(
-                _rank_correlation(
-                    [float(v) for v in matrix[:, column]], [float(s) for s in scores]
-                )
+                _rank_correlation([float(v) for v in matrix[:, column]], [float(s) for s in scores])
             )
             feature_weights.append({"name": name, "weight": round(weight, 6)})
         feature_weights.sort(key=lambda item: (-item["weight"], item["name"]))
@@ -136,7 +170,7 @@ def score_frozen_champion(
         "dataset_id": snapshot.dataset_id,
         "snapshot_sha256": snapshot.snapshot_sha256,
         "champion_id": str(pointer["champion_id"]),
-        "model_bundle_sha256": str(receipt["model_bundle_sha256"]),
+        "model_bundle_sha256": hashlib.sha256(bundle_bytes).hexdigest(),
         "latest_signal_date": signal_date.isoformat(),
         "recommendations": recommendations,
         "feature_weights": feature_weights[:3],
@@ -145,22 +179,73 @@ def score_frozen_champion(
     }
 
 
+def derive_current_universe(
+    *,
+    runtime_root: Path,
+    manifest: dict,
+    dataset_root: Path,
+    generated_at: str,
+) -> dict:
+    """Build the current-cycle universe from the current dataset only."""
+    _pointer, _champion, _config, _bundle = _load_frozen_package(runtime_root)
+    as_of_text = str(manifest["as_of"])
+    snapshot = load_snapshot(
+        manifest=manifest,
+        dataset_root=Path(dataset_root),
+        as_of=datetime.strptime(as_of_text, "%Y-%m-%d").date(),
+    )
+    return build_universe_document(
+        symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
+        as_of=as_of_text,
+        generated_at=generated_at,
+        dataset_manifest=manifest,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inference-only frozen champion scoring")
     parser.add_argument("--runtime-root", required=True)
     parser.add_argument("--dataset-manifest", required=True)
     parser.add_argument("--dataset-root", required=True)
-    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--generated-at", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--universe-out", default="")
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help=(
+            "DO NOT USE. Strategy parameters are governed by the frozen "
+            "champion's adapter config. Providing this flag causes a hard "
+            "failure to prevent live override of an activated champion."
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.top_k is not None:
+        json.dump(
+            {"error": "TOP_K_OVERRIDE_REJECTED", "detail": "top_k is frozen in the champion"},
+            sys.stdout,
+        )
+        sys.stdout.write("\n")
+        return EXIT_TOP_K_OVERRIDE_REJECTED
 
+    manifest = _load_json_object(Path(args.dataset_manifest))
     try:
         report = score_frozen_champion(
             runtime_root=Path(args.runtime_root),
-            manifest=_load_json_object(Path(args.dataset_manifest)),
+            manifest=manifest,
             dataset_root=Path(args.dataset_root),
-            top_k=args.top_k,
         )
+        if args.universe_out:
+            universe = derive_current_universe(
+                runtime_root=Path(args.runtime_root),
+                manifest=manifest,
+                dataset_root=Path(args.dataset_root),
+                generated_at=args.generated_at,
+            )
+            universe_path = Path(args.universe_out)
+            universe_path.parent.mkdir(parents=True, exist_ok=True)
+            universe_path.write_text(json.dumps(universe, ensure_ascii=True, indent=2) + "\n")
     except LookupError:
         json.dump({"error": "NO_ACTIVE_CHAMPION"}, sys.stdout)
         sys.stdout.write("\n")

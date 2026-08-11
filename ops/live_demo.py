@@ -110,6 +110,12 @@ def _last_good_from(previous: dict | None) -> dict:
             "last_good_signal_id": previous.get("last_good_signal_id"),
             "last_good_as_of": previous.get("last_good_as_of"),
         }
+    if previous is not None and previous.get("last_good_cycle_id") is not None:
+        return {
+            "last_good_cycle_id": previous.get("last_good_cycle_id"),
+            "last_good_signal_id": previous.get("last_good_signal_id"),
+            "last_good_as_of": previous.get("last_good_as_of"),
+        }
     return {
         "last_good_cycle_id": None,
         "last_good_signal_id": None,
@@ -288,9 +294,7 @@ def run_cycle(
             )
             return False
         acquired = json.loads(acquire.stdout)
-        manifest = json.loads(
-            Path(str(acquired["manifest_path"])).read_text(encoding="utf-8")
-        )
+        manifest = json.loads(Path(str(acquired["manifest_path"])).read_text(encoding="utf-8"))
         dataset = {
             "manifest": Path(str(acquired["manifest_path"])),
             "root": Path(str(acquired["dataset_dir"])),
@@ -310,8 +314,8 @@ def run_cycle(
             str(dataset["manifest"]),
             "--dataset-root",
             str(dataset["root"]),
-            "--top-k",
-            str(args.top_k),
+            "--generated-at",
+            generated_text,
             "--out",
             str(runtime_web / "inference-report.json"),
         ]
@@ -322,6 +326,14 @@ def run_cycle(
             cycle_id=cycle_id,
             generated_text=generated_text,
             error="NO_ACTIVE_CHAMPION",
+        )
+        return False
+    if inference.returncode == 5:
+        fail_cycle(
+            runtime_web,
+            cycle_id=cycle_id,
+            generated_text=generated_text,
+            error="TOP_K_OVERRIDE_REJECTED",
         )
         return False
     if inference.returncode != 0:
@@ -379,9 +391,7 @@ def run_cycle(
         return False
 
     pointer = _read_json(runtime_pilot / "active-champion.json")
-    champion_path = (
-        runtime_pilot / "champions" / str(pointer["champion_id"]) / "champion.json"
-    )
+    champion_path = runtime_pilot / "champions" / str(pointer["champion_id"]) / "champion.json"
     state_arguments = [
         python,
         "-m",

@@ -241,9 +241,7 @@ def build_universe_document(
 
 def load_pilot_cost_model(repository_root: Path) -> dict[str, Any]:
     document = json.loads(
-        (repository_root / "contracts/examples/cost-model.example.json").read_text(
-            encoding="utf-8"
-        )
+        (repository_root / "contracts/examples/cost-model.example.json").read_text(encoding="utf-8")
     )
     if not isinstance(document, dict):
         raise ValueError("cost model example must be an object")
@@ -421,16 +419,19 @@ def promote_baseline_model(
     champion_bytes = canonical_json_bytes(champion) + b"\n"
     champion_sha256 = canonical_json_sha256(champion)
 
-    champion_id = "champ-" + hashlib.sha256(
-        canonical_json_bytes(
-            {
-                "adapter_sha256": package_sha256,
-                "fixed_contract_set": fixed_contract_set,
-                "promotion_compatibility": promotion_compatibility,
-                "promoted_at": generated_text,
-            }
-        )
-    ).hexdigest()[:20]
+    champion_id = (
+        "champ-"
+        + hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "adapter_sha256": package_sha256,
+                    "fixed_contract_set": fixed_contract_set,
+                    "promotion_compatibility": promotion_compatibility,
+                    "promoted_at": generated_text,
+                }
+            )
+        ).hexdigest()[:20]
+    )
 
     receipt = {
         "receipt_id": "champion-promotion-receipt/v1",
@@ -476,11 +477,11 @@ def promote_baseline_model(
             _write_json(temporary / "contracts" / "execution-policy.json", execution_policy)
             _write_json(temporary / "contracts" / "portfolio-risk.json", portfolio_risk)
             _write_json(temporary / "contracts" / "universe.json", universe)
+            _write_json(temporary / "contracts" / "dataset-manifest.json", dict(dataset_manifest))
             _write_json(
-                temporary / "contracts" / "dataset-manifest.json", dict(dataset_manifest)
+                temporary / "adapter" / Path(*ADAPTER_ID.split("/")) / "adapter.json",
+                adapter_manifest,
             )
-            _write_json(temporary / "adapter" / Path(*ADAPTER_ID.split("/")) / "adapter.json",
-                        adapter_manifest)
             (temporary / "adapter" / Path(*ADAPTER_ID.split("/"))).mkdir(
                 parents=True, exist_ok=True
             )
@@ -539,6 +540,21 @@ def activate_champion(
     receipt = json.loads((package_dir / "promotion-receipt.json").read_text(encoding="utf-8"))
     if receipt.get("champion_id") != champion_id:
         raise ChampionPackageError("receipt champion_id does not match package")
+    if str(receipt.get("champion_sha256")) != canonical_json_sha256(champion):
+        raise ChampionPackageError("receipt champion_sha256 does not match champion")
+    fixed_contract_set = champion["fixed_contract_set"]
+    fixed_contract_files = {
+        "cost_model_sha256": "contracts/cost-model.json",
+        "market_rules_sha256": "contracts/market-rules.json",
+        "execution_policy_sha256": "contracts/execution-policy.json",
+        "portfolio_risk_sha256": "contracts/portfolio-risk.json",
+    }
+    for field, relative in fixed_contract_files.items():
+        document = json.loads((package_dir / relative).read_text(encoding="utf-8"))
+        if canonical_json_sha256(document) != str(fixed_contract_set[field]):
+            raise ChampionPackageError(
+                f"frozen contract {relative} does not match fixed_contract_set"
+            )
 
     adapter_dir = package_dir / "adapter" / Path(*str(champion["adapter_id"]).split("/"))
     manifest = json.loads((adapter_dir / "adapter.json").read_text(encoding="utf-8"))
@@ -570,6 +586,7 @@ def activate_champion(
         "pointer_id": "active-champion/v1",
         "champion_id": champion_id,
         "champion_sha256": canonical_json_sha256(champion),
+        "receipt_sha256": canonical_json_sha256(receipt),
         "activated_at": activated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "promotion_id": str(receipt["promotion_id"]),
     }
