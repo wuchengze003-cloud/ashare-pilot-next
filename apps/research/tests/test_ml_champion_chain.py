@@ -175,6 +175,7 @@ def run_pilot_command(
     *,
     contracts_dir: Path,
     adapter_root: Path,
+    champion_path: Path,
     dataset_root: Path,
     runs_root: Path,
     head_path: Path,
@@ -197,6 +198,8 @@ def run_pilot_command(
             str(contracts_dir),
             "--adapter-root",
             str(adapter_root),
+            "--champion",
+            str(champion_path),
             "--dataset-root",
             str(dataset_root),
             "--runs-root",
@@ -254,6 +257,7 @@ def test_promotion_feeds_live_signal_chain(tmp_path: Path) -> None:
     signal = run_pilot_command(
         contracts_dir=paths.contracts_dir,
         adapter_root=paths.adapter_root,
+        champion_path=paths.champion_path,
         dataset_root=dataset_dir,
         runs_root=runtime_root / "runs",
         head_path=runtime_root / "current-signal-head.json",
@@ -272,6 +276,7 @@ def test_promotion_feeds_live_signal_chain(tmp_path: Path) -> None:
     second = run_pilot_command(
         contracts_dir=paths.contracts_dir,
         adapter_root=paths.adapter_root,
+        champion_path=paths.champion_path,
         dataset_root=dataset_dir,
         runs_root=runtime_root / "runs",
         head_path=runtime_root / "current-signal-head.json",
