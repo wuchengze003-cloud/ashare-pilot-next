@@ -44,13 +44,15 @@ def verify_signal_binding(
     contract_set = latest_signal.get("contract_set", {})
     if not isinstance(contract_set, Mapping):
         return ["SIGNAL_CONTRACT_SET_MISSING"]
-    if current_snapshot_sha256 is not None and contract_set.get(
-        "dataset_snapshot_sha256"
-    ) != current_snapshot_sha256:
+    if (
+        current_snapshot_sha256 is not None
+        and contract_set.get("dataset_snapshot_sha256") != current_snapshot_sha256
+    ):
         reasons.append("SNAPSHOT_MISMATCH")
-    if active_champion_sha256 is not None and contract_set.get(
-        "champion_sha256"
-    ) != active_champion_sha256:
+    if (
+        active_champion_sha256 is not None
+        and contract_set.get("champion_sha256") != active_champion_sha256
+    ):
         reasons.append("CHAMPION_MISMATCH")
     return reasons
 
@@ -120,9 +122,7 @@ def build_web_state(
                 "recommendation": item["recommendation"],
                 "rank_strength": item["rank_strength"],
                 "price_band": item["price_band"],
-                "factors": [
-                    dict(factor) for factor in ranking_source["feature_weights"]
-                ],
+                "factors": [dict(factor) for factor in ranking_source["feature_weights"]],
                 "risk_notes": list(item["risk_notes"]),
             }
         )
@@ -269,9 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         as_of=datetime.strptime(as_of, "%Y-%m-%d").date(),
     )
     pointer = _read_pointer(Path(args.active_pointer)) if args.active_pointer else None
-    active_champion_sha256 = (
-        str(pointer["champion_sha256"]) if pointer is not None else None
-    )
+    active_champion_sha256 = str(pointer["champion_sha256"]) if pointer is not None else None
     latest_signal = _read_latest_signal(Path(args.runs_root), Path(args.head_path))
     binding = verify_signal_binding(
         latest_signal=latest_signal,
