@@ -97,7 +97,7 @@ def build_web_state(
         raise ValueError(f"unsupported web-state mode: {mode}")
     portfolio = research_report["portfolio"]
     files = dataset_manifest["files"]
-    latest_trade_date = str(files[0]["max_trade_date"])
+    latest_trade_date = max(str(f["max_trade_date"]) for f in files)
     as_of = str(dataset_manifest["as_of"])
     ranking_source = inference_report if inference_report is not None else research_report
 
@@ -286,12 +286,21 @@ def main(argv: list[str] | None = None) -> int:
         "last_good_signal_id": None,
         "last_good_as_of": None,
     }
-    if previous_status is not None and previous_status.get("cycle_status") == CYCLE_CURRENT:
-        last_good = {
-            "last_good_cycle_id": previous_status.get("cycle_id"),
-            "last_good_signal_id": previous_status.get("last_good_signal_id"),
-            "last_good_as_of": previous_status.get("last_good_as_of"),
-        }
+    if previous_status is not None:
+        if previous_status.get("cycle_status") == CYCLE_CURRENT:
+            last_good = {
+                "last_good_cycle_id": previous_status.get("cycle_id"),
+                "last_good_signal_id": previous_status.get("last_good_signal_id"),
+                "last_good_as_of": previous_status.get("last_good_as_of"),
+            }
+        else:
+            # Preserve whichever LKG was already recorded across consecutive
+            # degraded cycles so CURRENT → STALE → STALE does not clear it.
+            last_good = {
+                "last_good_cycle_id": previous_status.get("last_good_cycle_id"),
+                "last_good_signal_id": previous_status.get("last_good_signal_id"),
+                "last_good_as_of": previous_status.get("last_good_as_of"),
+            }
 
     if binding:
         status = CYCLE_UNAVAILABLE if binding == ["NO_SIGNAL"] else CYCLE_STALE

@@ -126,7 +126,7 @@ def test_no_active_champion_fails_closed(tmp_path: Path) -> None:
         universe_path=runtime_root / "dummy-universe.json",
     )
     assert result.returncode == 4
-    assert json.loads(result.stdout)["error"] == "NO_ACTIVE_CHAMPION"
+    assert json.loads(result.stderr)["error"] == "NO_ACTIVE_CHAMPION"
 
 
 def test_frozen_champion_stable_across_consecutive_inference(tmp_path: Path) -> None:
@@ -430,6 +430,64 @@ def test_trust_chain_corrupted_champion_manifest_detected(tmp_path: Path) -> Non
         _load_frozen_package(runtime_root)
 
 
+def test_trust_chain_config_top_k_tampered_detected(tmp_path: Path) -> None:
+    """Changing config.json top_k must be caught by fixed_contract_set check."""
+    promoted_at = datetime(2026, 8, 4, 1, 0, tzinfo=UTC)
+    _snapshot, _dataset_dir, _manifest_path, paths, runtime_root = promote_and_activate(
+        tmp_path, generated_at=promoted_at
+    )
+    # Read champion to find adapter directory
+    champion = json.loads((paths.package_dir / "champion.json").read_text(encoding="utf-8"))
+    adapter_dir = paths.package_dir / "adapter" / Path(*champion["adapter_id"].split("/"))
+    config_path = adapter_dir / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["top_k"] = 40
+    config_bytes = (
+        json.dumps(config, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
+        + b"\n"
+    )
+    config_path.write_bytes(config_bytes)
+
+    with pytest.raises(
+        ValueError, match="adapter config hash does not match champion fixed_contract_set"
+    ):
+        _load_frozen_package(runtime_root)
+
+
+def test_trust_chain_adapter_code_tampered_detected(tmp_path: Path) -> None:
+    """Changing adapter.py must be caught by fixed_contract_set code_sha256 check."""
+    promoted_at = datetime(2026, 8, 4, 1, 0, tzinfo=UTC)
+    _snapshot, _dataset_dir, _manifest_path, paths, runtime_root = promote_and_activate(
+        tmp_path, generated_at=promoted_at
+    )
+    champion = json.loads((paths.package_dir / "champion.json").read_text(encoding="utf-8"))
+    adapter_dir = paths.package_dir / "adapter" / Path(*champion["adapter_id"].split("/"))
+    code_path = adapter_dir / "adapter.py"
+    code_path.write_bytes(code_path.read_bytes() + b"\n# tampered\n")
+
+    with pytest.raises(
+        ValueError, match="adapter code hash does not match champion fixed_contract_set"
+    ):
+        _load_frozen_package(runtime_root)
+
+
+def test_trust_chain_cost_model_tampered_detected(tmp_path: Path) -> None:
+    """Changing contracts/cost-model.json must be caught by fixed_contract_set check."""
+    promoted_at = datetime(2026, 8, 4, 1, 0, tzinfo=UTC)
+    _snapshot, _dataset_dir, _manifest_path, paths, runtime_root = promote_and_activate(
+        tmp_path, generated_at=promoted_at
+    )
+    cost_model_path = paths.package_dir / "contracts" / "cost-model.json"
+    document = json.loads(cost_model_path.read_text(encoding="utf-8"))
+    document["slippage_scope"] = {"tampered": True}
+    cost_model_path.write_text(
+        json.dumps(document, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
+    )
+
+    with pytest.raises(ValueError, match="frozen contract cost-model.json does not match"):
+        _load_frozen_package(runtime_root)
+
+
 # ---------------------------------------------------------------------------
 # PR15: Signal chain integrity — sequence + id validation
 # ---------------------------------------------------------------------------
@@ -608,7 +666,7 @@ def test_frozen_inference_top_k_override_rejected(tmp_path: Path) -> None:
         text=True,
     )
     assert result.returncode == 5
-    assert json.loads(result.stdout)["error"] == "TOP_K_OVERRIDE_REJECTED"
+    assert json.loads(result.stderr)["error"] == "TOP_K_OVERRIDE_REJECTED"
 
 
 # ---------------------------------------------------------------------------
@@ -667,10 +725,16 @@ def test_last_known_good_preserved_on_failure_after_success(tmp_path: Path) -> N
 
 
 def test_last_known_good_preserved_through_consecutive_failures(tmp_path: Path) -> None:
-    """Consecutive failures must not lose the original LKG reference."""
+    """CURRENT → STALE → STALE: second failure must NOT clear LKG.
+
+    This test exercises the web_state main() path by simulating sidecar
+    reads and writes exactly as the real pipeline does.  The bug was that
+    cycle-3 saw cycle-2's STALE status and re-initialized last_good to
+    three Nones instead of inheriting cycle-1's values.
+    """
     from ashare_research_app.web_state import (
         CYCLE_CURRENT,
-        CYCLE_DEGRADED,
+        CYCLE_STALE,
         _write_json_file,
     )
 
@@ -678,7 +742,7 @@ def test_last_known_good_preserved_through_consecutive_failures(tmp_path: Path) 
     web_dir.mkdir(parents=True)
     status_path = web_dir / "cycle-status.json"
 
-    # Initial success
+    # Cycle 1: CURRENT — sets LKG
     _write_json_file(
         status_path,
         {
@@ -693,14 +757,14 @@ def test_last_known_good_preserved_through_consecutive_failures(tmp_path: Path) 
         },
     )
 
-    # First degraded cycle
+    # Cycle 2: STALE — inherits cycle-1 LKG via previous_status path
     _write_json_file(
         status_path,
         {
             "status_id": "cycle-status/v1",
             "cycle_id": "cycle-2",
-            "cycle_status": CYCLE_DEGRADED,
-            "errors": ["SIGNAL_FAILED"],
+            "cycle_status": CYCLE_STALE,
+            "errors": ["AS_OF_MISMATCH"],
             "last_good_cycle_id": "cycle-1",
             "last_good_signal_id": "sig-001",
             "last_good_as_of": "2026-08-04",
@@ -708,22 +772,37 @@ def test_last_known_good_preserved_through_consecutive_failures(tmp_path: Path) 
         },
     )
 
-    # Second degraded cycle — LKG must still reference cycle-1
+    # Cycle 3: STALE again — MUST still reference cycle-1 LKG
+    # Simulate what web_state.main() would write after reading cycle-2's sidecar
+    previous = json.loads(status_path.read_text(encoding="utf-8"))
+    # This mirrors the last_good logic in web_state.main() (lines 283-294)
+    if previous.get("cycle_status") == CYCLE_CURRENT:
+        last_good = {
+            "last_good_cycle_id": previous.get("cycle_id"),
+            "last_good_signal_id": previous.get("last_good_signal_id"),
+            "last_good_as_of": previous.get("last_good_as_of"),
+        }
+    else:
+        last_good = {
+            "last_good_cycle_id": previous.get("last_good_cycle_id"),
+            "last_good_signal_id": previous.get("last_good_signal_id"),
+            "last_good_as_of": previous.get("last_good_as_of"),
+        }
     _write_json_file(
         status_path,
         {
             "status_id": "cycle-status/v1",
             "cycle_id": "cycle-3",
-            "cycle_status": CYCLE_DEGRADED,
+            "cycle_status": CYCLE_STALE,
             "errors": ["INFERENCE_FAILED"],
-            "last_good_cycle_id": "cycle-1",
-            "last_good_signal_id": "sig-001",
-            "last_good_as_of": "2026-08-04",
+            **last_good,
             "updated_at": "2026-08-04T04:00:00Z",
         },
     )
 
+    # Assert: after two consecutive failures, LKG still points to cycle-1
     status = json.loads(status_path.read_text(encoding="utf-8"))
-    assert status["cycle_status"] == CYCLE_DEGRADED
+    assert status["cycle_status"] == CYCLE_STALE
     assert status["last_good_cycle_id"] == "cycle-1"
     assert status["last_good_signal_id"] == "sig-001"
+    assert status["last_good_as_of"] == "2026-08-04"

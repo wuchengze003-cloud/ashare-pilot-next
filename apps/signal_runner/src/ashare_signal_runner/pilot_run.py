@@ -194,8 +194,8 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.runtime_root)
             )
         except LookupError:
-            json.dump({"error": "NO_ACTIVE_CHAMPION"}, sys.stdout)
-            sys.stdout.write("\n")
+            json.dump({"error": "NO_ACTIVE_CHAMPION"}, sys.stderr)
+            sys.stderr.write("\n")
             return EXIT_NO_ACTIVE_CHAMPION
         if not args.dataset_manifest or not args.universe:
             print("runtime-root requires --dataset-manifest and --universe for the current cycle")

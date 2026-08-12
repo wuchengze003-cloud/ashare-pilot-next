@@ -67,9 +67,10 @@ def _load_frozen_package(runtime_root: Path) -> tuple[dict, dict, dict, bytes]:
     """Return (pointer, champion, config, bundle_bytes) after integrity checks.
 
     The trust chain flows from the activation pointer (outside the
-    package) through receipt_sha256 → champion_sha256 → model bundle
-    SHA → adapter config SHA.  Tampering any asset or hash that is
-    anchored in the pointer is detected.
+    package) through receipt_sha256 → champion_sha256 → fixed_contract_set
+    → model bundle → adapter config.  Every asset anchored in
+    fixed_contract_set is re-verified on every load so that post-activation
+    tampering of the frozen package is detected.
     """
     pointer_path = Path(runtime_root) / "active-champion.json"
     if not pointer_path.is_file():
@@ -84,10 +85,40 @@ def _load_frozen_package(runtime_root: Path) -> tuple[dict, dict, dict, bytes]:
         raise ValueError("active pointer receipt hash does not match package receipt")
     if str(receipt["champion_sha256"]) != _canonical_sha256(champion):
         raise ValueError("promotion receipt champion hash does not match champion")
-    adapter_id = str(champion["adapter_id"])  # read from champion, not hardcoded
-    config = _load_json_object(
-        package_dir / "adapter" / Path(*adapter_id.split("/")) / "config.json"
-    )
+    adapter_id = str(champion["adapter_id"])
+
+    # --- fixed_contract_set: asset-by-asset verification on every load ---
+    fixed = champion["fixed_contract_set"]
+
+    # adapter.py — raw bytes hash (code_sha256 was computed over raw bytes)
+    code_path = package_dir / "adapter" / Path(*adapter_id.split("/")) / "adapter.py"
+    code_bytes = code_path.read_bytes()
+    if hashlib.sha256(code_bytes).hexdigest() != str(fixed["code_sha256"]):
+        raise ValueError("adapter code hash does not match champion fixed_contract_set")
+
+    # config.json — raw bytes hash (config_sha256 = SHA256(config_bytes))
+    config_path = package_dir / "adapter" / Path(*adapter_id.split("/")) / "config.json"
+    config_bytes = config_path.read_bytes()
+    if hashlib.sha256(config_bytes).hexdigest() != str(fixed["config_sha256"]):
+        raise ValueError("adapter config hash does not match champion fixed_contract_set")
+
+    # contract files — write side used canonical_json_sha256 (without trailing \n)
+    contracts_dir = package_dir / "contracts"
+    fixed_contract_files = {
+        "cost_model_sha256": "cost-model.json",
+        "market_rules_sha256": "market-rules.json",
+        "execution_policy_sha256": "execution-policy.json",
+        "portfolio_risk_sha256": "portfolio-risk.json",
+    }
+    for field, filename in fixed_contract_files.items():
+        document = _load_json_object(contracts_dir / filename)
+        if _canonical_sha256(document) != str(fixed[field]):
+            raise ValueError(
+                f"frozen contract {filename} does not match champion fixed_contract_set"
+            )
+
+    # --- adapter config content (already parsed for use) ---
+    config = _load_json_object(config_path)
     bundle_bytes = (package_dir / "model" / "model.bundle").read_bytes()
     bundle_sha = hashlib.sha256(bundle_bytes).hexdigest()
     if bundle_sha != str(receipt["model_bundle_sha256"]):
@@ -108,26 +139,33 @@ def score_frozen_champion(
     top_k = int(config["top_k"])
 
     as_of_text = str(manifest["as_of"])
+    as_of_date = datetime.strptime(as_of_text, "%Y-%m-%d").date()
     snapshot = load_snapshot(
         manifest=manifest,
         dataset_root=Path(dataset_root),
-        as_of=datetime.strptime(as_of_text, "%Y-%m-%d").date(),
+        as_of=as_of_date,
     )
-    bars_by_symbol: dict[str, list] = {}
-    for bar in snapshot.records:
-        bars_by_symbol.setdefault(bar.symbol, []).append(bar)
-    for bars in bars_by_symbol.values():
-        bars.sort(key=lambda item: item.trade_date)
-    signal_date = max(bar.trade_date for bar in snapshot.records)
+    # Assert the manifest as_of is present in the data panel — a mismatch
+    # between the declared as_of and available data must fail explicitly.
+    if not any(bar.trade_date == as_of_date for bar in snapshot.records):
+        raise ValueError(f"manifest as_of {as_of_text} not present in snapshot panel")
+    signal_date = as_of_date
 
     panel = build_feature_panel(snapshot, as_of=signal_date)
     rows = [row for row in panel if row.trade_date == signal_date]
+    if not rows:
+        raise ValueError(f"no feature rows on signal date {signal_date.isoformat()}")
     matrix = np.asarray([row.values for row in rows], dtype=float)
     scores = model.score(matrix)
     ranked = sorted(
         ((row.symbol, float(score)) for row, score in zip(rows, scores, strict=True)),
         key=lambda item: (-item[1], item[0]),
     )
+    if not ranked:
+        raise ValueError("frozen inference produced zero ranked symbols")
+    bars_by_symbol: dict[str, list] = {}
+    for bar in snapshot.records:
+        bars_by_symbol.setdefault(bar.symbol, []).append(bar)
     targets = [symbol for symbol, _ in ranked[:top_k]]
     number_of_symbols = len(ranked)
 
@@ -224,9 +262,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.top_k is not None:
         json.dump(
             {"error": "TOP_K_OVERRIDE_REJECTED", "detail": "top_k is frozen in the champion"},
-            sys.stdout,
+            sys.stderr,
         )
-        sys.stdout.write("\n")
+        sys.stderr.write("\n")
         return EXIT_TOP_K_OVERRIDE_REJECTED
 
     manifest = _load_json_object(Path(args.dataset_manifest))
@@ -247,8 +285,8 @@ def main(argv: list[str] | None = None) -> int:
             universe_path.parent.mkdir(parents=True, exist_ok=True)
             universe_path.write_text(json.dumps(universe, ensure_ascii=True, indent=2) + "\n")
     except LookupError:
-        json.dump({"error": "NO_ACTIVE_CHAMPION"}, sys.stdout)
-        sys.stdout.write("\n")
+        json.dump({"error": "NO_ACTIVE_CHAMPION"}, sys.stderr)
+        sys.stderr.write("\n")
         return EXIT_NO_ACTIVE_CHAMPION
 
     out_path = Path(args.out)
