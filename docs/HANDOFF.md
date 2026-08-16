@@ -116,12 +116,13 @@ tools/update.py                              -> orchestrator (intraday / full / 
 ## 6. Deployment tasks
 
 ### 6.1 GitHub
-- Commit + push the 16 rounds of work. **Do NOT** force-push, do NOT merge into
-  `main` directly (AGENTS.md rule 13: main changes only via PR).
-- Recommended: create a feature branch off `feat/frozen-champion-lifecycle`
-  (e.g. `feat/dashboard-16-rounds`) and open a PR, so the user can hand the
-  branch/PR to web GPT/Claude for review.
-- Ensure `runtime/` and `.env` are git-ignored before committing.
+- All cleanup work is committed and pushed to `feat/dashboard-handoff`.
+  **Do NOT** force-push and do NOT merge into `main` directly (AGENTS.md rule 13:
+  main changes only via PR).
+- PR #16 (`feat/dashboard-handoff` -> `main`) is open, mergeable, and its CI
+  checks pass:
+  https://github.com/wuchengze003-cloud/ashare-pilot-next/pull/16
+- `runtime/` and `.env` are git-ignored and were never committed.
 
 ### 6.2 Aliyun (front-end) - deployed
 - The dashboard is **pure static HTML** (`runtime/dashboard/`). It is deployed
