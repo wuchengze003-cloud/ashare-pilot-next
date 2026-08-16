@@ -7,8 +7,8 @@ Policy enforced here:
 - CJK string literals are allowed only in user-facing UI/output strings:
   * tools/*.py (dashboard HTML and CLI output),
   * test files under */tests/ (Chinese stock names in fixture data),
-  * champion.py display-label assignments FEATURE_LABELS, KEY_FEATURES, and
-    reason_labels,
+  * champion.py dashboard-facing strings: FEATURE_LABELS, KEY_FEATURES,
+    reason_labels, the ``generate`` document, and the __main__ console output,
   * apps/web/static/*.html user-facing HTML.
 Exit code 0 means the policy holds; 1 reports every violation.
 """
