@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.workbuddy/
 .idea/
 .vscode/
 __pycache__/

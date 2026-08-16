@@ -18,6 +18,7 @@ package = false
 [tool.uv.workspace]
 members = [
   "packages/quant_core",
+  "packages/obs",
   "apps/research",
   "apps/signal_runner",
   "services/data_gateway"
@@ -28,6 +29,7 @@ addopts = "-q"
 pythonpath = ["."]
 testpaths = [
   "packages/quant_core/tests",
+  "packages/obs/tests",
   "services/data_gateway/tests",
   "apps/research/tests",
   "apps/signal_runner/tests",
