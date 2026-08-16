@@ -4,12 +4,13 @@ Policy enforced here:
 - README.md and docs/architecture/**/*.md contain no CJK characters.
 - Comments and docstrings in Python/JS/TS/Shell files under apps/, packages/,
   services/, tools/, and ops/ are English.
-- CJK string literals are allowed only in user-facing UI/output strings:
+- CJK string literals are allowed only in the user-facing UI/output strings
+  enumerated below:
   * tools/*.py (dashboard HTML and CLI output),
   * test files under */tests/ (Chinese stock names in fixture data),
-  * champion.py dashboard-facing strings: FEATURE_LABELS, KEY_FEATURES,
-    reason_labels, the ``generate`` document, and the __main__ console output,
+  * champion.py FEATURE_LABELS and KEY_FEATURES display-label assignments,
   * apps/web/static/*.html user-facing HTML.
+Any other CJK string literal is a violation.
 Exit code 0 means the policy holds; 1 reports every violation.
 """
 
@@ -28,7 +29,7 @@ CODE_ROOTS = ("apps", "packages", "services", "tools", "ops")
 PY_SUFFIXES = {".py"}
 JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".sh"}
 HTML_SUFFIXES = {".html", ".htm"}
-CHAMPION_UI_VARIABLES = {"FEATURE_LABELS", "KEY_FEATURES", "reason_labels"}
+CHAMPION_UI_VARIABLES = {"FEATURE_LABELS", "KEY_FEATURES"}
 
 
 def _has_cjk(text: str) -> bool:
@@ -93,26 +94,14 @@ def _walk_python(path: Path, violations: list[str], root: Path = ROOT) -> None:
     allowed_node_ids: set[int] = set()
     if path.name == "champion.py":
         for node in ast.walk(tree):
-            if isinstance(node, (ast.Assign, ast.AnnAssign)):
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                if any(
-                    isinstance(target, ast.Name) and target.id in CHAMPION_UI_VARIABLES
-                    for target in targets
-                ):
-                    for child in ast.walk(node.value):
-                        allowed_node_ids.add(id(child))
-            elif isinstance(node, ast.FunctionDef) and node.name == "generate":
-                # ``generate`` builds the dashboard-facing champion document.
-                for child in ast.walk(node):
-                    allowed_node_ids.add(id(child))
-            elif (
-                isinstance(node, ast.If)
-                and isinstance(node.test, ast.Compare)
-                and isinstance(node.test.left, ast.Name)
-                and node.test.left.id == "__name__"
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(
+                isinstance(target, ast.Name) and target.id in CHAMPION_UI_VARIABLES
+                for target in targets
             ):
-                # The __main__ block is user-facing console output.
-                for child in ast.walk(node):
+                for child in ast.walk(node.value):
                     allowed_node_ids.add(id(child))
 
     for node in ast.walk(tree):

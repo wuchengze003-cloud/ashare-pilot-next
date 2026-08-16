@@ -768,8 +768,9 @@ def generate(root: Path) -> dict:
         if len(seg) >= 5:
             yearly.append({"year": yr, "return": float((1 + seg).prod() - 1.0)})
 
-    # exit-reason distribution (for the "why do we sell" explanation)
-    reason_labels = {"stop": "止损", "profit": "止盈", "signal": "信号失效", "cashout": "空仓"}
+    # Exit-reason distribution (for the "why do we sell" explanation).
+    # The dashboard renderer maps these stable codes to Chinese display labels.
+    reason_labels = {"stop": "STOP", "profit": "PROFIT", "signal": "SIGNAL", "cashout": "CASHOUT"}
     reason_counts: dict[str, int] = {}
     for t in trades:
         if t["side"] == "sell":
@@ -817,7 +818,7 @@ def generate(root: Path) -> dict:
             gap = (pd.Timestamp(d) - pd.Timestamp(cashout_history[-1]["date"])).days
             if gap <= 5:
                 continue
-        cashout_history.append({"date": d, "event": "大盘跌破均线，清仓空仓"})
+        cashout_history.append({"date": d, "event": "CASHOUT"})
 
     # current holdings: rebuild from the paper-trade log (buy minus sell).
     held: dict[str, dict] = {}
@@ -897,8 +898,8 @@ def generate(root: Path) -> dict:
     return {
         "generated_at": str(latest_date.date()),
         "signal_date": str(latest_date.date()),
-        "strategy": "阿醒的 AI 策略 0813 · 模拟仓",
-        "model_note": "训练模型：Deepseek-V4-Pro",
+        "strategy": "ashare-ai-strategy-0813-sim",
+        "model_note": "deepseek-v4-pro",
         "config": {
             "top_k": TOP_K,
             "label_horizon": LABEL_HORIZON,
@@ -944,8 +945,8 @@ if __name__ == "__main__":
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     m = out["metrics"]
     print(f"signal_date={out['signal_date']}  top_k={len(out['signals'])}")
-    print(f"年化 {m['annual_return']:.2%} 夏普 {m['sharpe']:.2f} "
-          f"回撤 {m['max_drawdown']:.2%} 换手 {m['avg_turnover']:.2%}")
+    print(f"annual {m['annual_return']:.2%} sharpe {m['sharpe']:.2f} "
+          f"maxdd {m['max_drawdown']:.2%} turnover {m['avg_turnover']:.2%}")
     for seg, v in out["segments"].items():
-        print(f"  {seg:6s} 年化 {v.get('annual_return', 0):.2%} 夏普 {v.get('sharpe', 0):.2f}")
+        print(f"  {seg:6s} annual {v.get('annual_return', 0):.2%} sharpe {v.get('sharpe', 0):.2f}")
     print(f"written -> {out_dir / 'champion.json'}")

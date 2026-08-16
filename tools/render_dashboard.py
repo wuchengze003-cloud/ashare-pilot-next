@@ -18,6 +18,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DETAIL_DIR = ROOT / "runtime/dashboard/detail"
 
+# Stable strategy/model identifiers emitted by champion.py are mapped to the
+# Chinese labels shown on the investor dashboard.
+STRATEGY_DISPLAY = {
+    "ashare-ai-strategy-0813-sim": "阿醒的 AI 策略 0813 · 模拟仓",
+}
+MODEL_NOTE_DISPLAY = {
+    "deepseek-v4-pro": "训练模型：Deepseek-V4-Pro",
+}
+
+
+def _strategy_title(data: dict) -> str:
+    value = data.get("strategy", "")
+    return STRATEGY_DISPLAY.get(value, value or "每日选股信号")
+
+
+def _model_note(data: dict) -> str:
+    value = data.get("model_note", "")
+    return MODEL_NOTE_DISPLAY.get(value, value)
+
 
 def _load() -> dict:
     return json.loads((ROOT / "runtime/dashboard/champion.json").read_text(encoding="utf-8"))
@@ -174,8 +193,9 @@ def _exit_reason_bars(exit_reasons, w, h, pad):
         cy = pad + i * bar_h + bar_h / 2
         bw = (x["count"] / max_c) * (w - pad * 2 - 120 - 80)
         color = colors.get(x["reason"], "#58a6ff")
+        exit_label = CLOSED_REASON.get(x["reason"], x["label"])
         out.append(
-            f'<text x="{pad}" y="{cy + 4}" fill="#8b949e" font-size="12">{x["label"]}</text>'
+            f'<text x="{pad}" y="{cy + 4}" fill="#8b949e" font-size="12">{exit_label}</text>'
         )
         out.append(
             f'<rect x="{pad + 100}" y="{cy - 6}" width="{bw:.1f}" height="12" rx="2" '
@@ -625,10 +645,11 @@ def _cashout_row(h, buy_dates):
         dur = f"{days} 天"
     else:
         reentry, dur = "至今未重新买入", "—"
+    event_key = h.get("event", "").lower()
     return (
         f'<tr><td class="code">{h["date"]}</td>'
         f'<td class="code">{reentry}</td><td>{dur}</td>'
-        f'<td class="reason">{h["event"]}</td></tr>'
+        f'<td class="reason">{CLOSED_REASON.get(event_key, h.get("event", ""))}</td></tr>'
     )
 
 
@@ -793,7 +814,7 @@ a {{ color:inherit; text-decoration:none; }}
 <body>
 <div class="container">
 <header>
-  <h1>{data.get('strategy', '每日选股信号')}</h1>
+  <h1>{_strategy_title(data)}</h1>
   <div class="sub">信号日期 {data['signal_date']}（收盘后生成，次日开盘执行）· 计划买入 {len(data['signals'])} 只 · 初始资金 {cfg.get('initial_cash', 1000000) / 10000:.0f} 万</div>
   <div class="sub" style="margin-top:6px"><a href="acceptance.html">📋 模型验收报告 →</a></div>
 </header>
@@ -1379,8 +1400,8 @@ td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }}
 <body>
 <div class="container">
 <a class="back" href="index.html">← 返回模拟仓</a>
-<h1>模型验收报告 · {data.get('strategy', '')}</h1>
-<div style="color:var(--muted);font-size:13px;margin-top:4px">{data.get('model_note', '')}</div>
+<h1>模型验收报告 · {_strategy_title(data)}</h1>
+<div style="color:var(--muted);font-size:13px;margin-top:4px">{_model_note(data)}</div>
 
 <div class="verdict" style="margin-top:16px;color:{verdict_color}">结论：{verdict}（通过 {n_pass} 项 / 已实测·判定不适用 2 项 / 部分达标 1 项）</div>
 
@@ -1461,7 +1482,7 @@ h2 {{ font-size:15px; color:var(--blue); margin:22px 0 10px; }}
 <body>
 <div class="container">
 <a class="back" href="../index.html">← 返回模拟仓</a>
-<h1>模型 M{idx} · {data.get('strategy', '')}</h1>
+<h1>模型 M{idx} · {_strategy_title(data)}</h1>
 <div class="sub">重训日 {me.get('refit_date', '')} · 生效区间 {me.get('start_date', '')} ~ {me.get('end_date', '')} · 共 {len(data.get('model_evolution', []))} 个滚动模型</div>
 
 <div class="cards">
