@@ -50,9 +50,11 @@ tools/update.py                              -> orchestrator (intraday / full / 
   = ADOPTED.
 - **Dashboard**: factor evolution (27 factors, checkboxes + hover), NAV with
   model-stage markers (click-through), per-model pages (28), closed-trade
-  win-rate (54.7%, profit/loss ratio 2.7), historical signals calendar with
+  win-rate (54.8%, profit/loss ratio 2.65), historical signals calendar with
   flat-market handling, per-stock research cards (valuation / 4-group financials
   / margin / north-bound / dragon-tiger / chip / rating / concepts / consensus).
+  These metrics come from the current `runtime/dashboard/champion.json`; earlier
+  rounds had recorded 54.7% / 2.7 before the final closed-trade snapshot grew.
 - **Independent update system**: `tools/update.py` (intraday / full / render) +
   `docs/UPDATE_RUNBOOK.md`.
 - **Decision skill**: `~/.workbuddy/skills/ashare-decision/SKILL.md`.
