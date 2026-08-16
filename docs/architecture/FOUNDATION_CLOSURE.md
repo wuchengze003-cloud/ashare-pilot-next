@@ -1,57 +1,80 @@
-# 生产底座收口清单
+# Production Foundation Closure Checklist
 
-本清单限定真实数据接入前的剩余工作。每一项必须以独立Pull Request完成，
-不得混入旧仓库目录、历史报告、运行数据、供应商数据或正式策略。
+This checklist scopes the remaining work before real data can be connected.
+Every item must land through an independent pull request and must not mix in
+legacy repository directories, historical reports, runtime data, vendor data, or
+production strategies.
 
-## Gate 1：统一生产状态管线
+## Gate 1: Unified Production State Pipeline
 
-- Signal Runner只有一个生产构建入口。
-- 状态由系统校验结果推导，调用者不能直接声明健康状态。
-- 合同漂移、数据过期和哈希异常优先生成`HOLD`。
-- 没有可验证前序信号时失败关闭，不伪造持仓。
-- 从未激活Champion时生成`FLAT`，风险退出生成`REDUCE_ONLY`或`FLAT`。
+- Signal Runner has exactly one production build entry point.
+- State is derived from system validation results; callers cannot declare health
+  directly.
+- Contract drift, data staleness, and hash anomalies prefer `HOLD`.
+- Fail closed when no verifiable previous signal exists; never fabricate
+  holdings.
+- A never-activated Champion produces `FLAT`; a risk exit produces `REDUCE_ONLY`
+  or `FLAT`.
 
-## Gate 2：不可变点时快照
+## Gate 2: Immutable Point-in-Time Snapshots
 
-- 数据与Universe由同一次校验过的字节构造只读快照。
-- 策略只能接收快照，不能接收路径、网络客户端或独立行情副本。
-- Champion绑定固定规则版本；当日数据和Universe快照作为运行证据单独绑定。
-- 未来数据追加不改变历史可见快照、特征和目标仓位。
+- Data and Universe snapshots are constructed read-only from the same
+  once-validated bytes.
+- Strategies receive only snapshots, never paths, network clients, or separate
+  market-data copies.
+- A Champion binds fixed rule versions; the day's data and Universe snapshots are
+  bound separately as run evidence.
+- Appending future data never changes historical visible snapshots, features, or
+  targets.
 
-## Gate 3：受信任策略与环境身份
+## Gate 3: Trusted Strategy and Environment Identity
 
-- 生产入口只按注册表加载获批适配器，禁止注入任意Python对象。
-- 运行时自行核验适配器、配置、Git提交和锁文件摘要。
-- 声明身份与本机实际身份不一致时失败关闭或保持上一有效目标。
+- The production entry loads only registered, approved adapters; injecting an
+  arbitrary Python object is forbidden.
+- The runtime itself verifies the adapter, config, Git commit, and lockfile
+  digests.
+- When declared identity differs from locally computed identity, fail closed or
+  keep the previous valid target.
 
-## Gate 4：信号链与发布恢复
+## Gate 4: Signal Chain and Publication Recovery
 
-- 每次运行只能引用当前已提交链头。
-- 前序信号必须满足时间、序号和链式哈希约束。
-- 发布产物不可变，消费者只读取完整提交的运行目录。
-- 重命名前后故障和进程重启均有确定恢复规则与攻击测试。
+- Every run may reference only the currently committed head.
+- The previous signal must satisfy time, sequence, and chained-hash constraints.
+- Published artifacts are immutable; consumers read only fully committed run
+  directories.
+- Rename failures and process restarts have deterministic recovery rules and
+  attack tests.
 
-## Gate 5：数据网关实证能力
+## Gate 5: Data Gateway Evidence Capabilities
 
-仅按`MIGRATION_POLICY.md`重新实现并重新验证三项能力：
+Reimplement and re-verify only the three capabilities described in
+`MIGRATION_POLICY.md`:
 
-- 确定性特征回放与未来数据负对照。
-- 退市证券和历史成分覆盖审计。
-- 过期数据与过期信号失败关闭。
+- Deterministic feature replay with a future-data negative control.
+- Delisted-security and historical-member coverage audit.
+- Fail-closed behavior for stale data and stale signals.
 
-旧实现、旧测试、旧数字和旧报告均不得直接迁入。
+Legacy implementations, legacy tests, legacy numbers, and legacy reports must
+not be migrated directly.
 
-## 冻结条件
+## Freeze Conditions
 
-五项Gate全部通过仓库边界检查、合同校验、单元测试和攻击测试后，生产底座冻结。
-冻结后才能接入首个真实数据适配器；在此之前不得宣称真实回测或交易能力。
+After all five gates pass the repository boundary checks, contract validation,
+unit tests, and attack tests, the production foundation freezes. The first real
+data adapter may only be connected after that freeze; before it, no real backtest
+or trading capability may be claimed.
 
-## 冻结状态
+## Freeze Status
 
-截至2026-07-30，五项Gate已在主分支分别通过独立Pull Request和云端检查。当前底座
-冻结为“合成闭环完成、真实能力尚未接入”：
+As of 2026-07-30, all five gates passed independent pull requests and cloud
+checks on the main branch. The foundation is currently frozen as "synthetic
+loop complete, real capabilities not yet connected":
 
-- 允许后续以独立Pull Request接入首个真实数据适配器和正式策略研究。
-- 禁止绕过合同、链头、点时快照、覆盖审计和新鲜度门禁。
-- 禁止迁入旧策略、旧报告、旧运行产物、旧数据文件或兼容入口。
-- 任何合同含义或模块边界变更必须同时更新Schema、攻击测试和本清单。
+- Later pull requests may connect the first real data adapter and formal
+  strategy research.
+- Bypassing contracts, the head, point-in-time snapshots, coverage audit, or
+  freshness gates is forbidden.
+- Migrating legacy strategies, reports, runtime artifacts, data files, or
+  compatibility entry points is forbidden.
+- Any contract-meaning or module-boundary change must update the schemas, attack
+  tests, and this checklist together.

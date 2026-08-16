@@ -76,39 +76,32 @@ tools/update.py                              -> orchestrator (intraday / full / 
 
 ## 5. Known tech debt & audit checklist
 
-### 5.1 Git is far behind
-- Current branch `feat/frozen-champion-lifecycle` (PR15). `main` is still at PR14.
-- **Almost all 16 rounds of work are uncommitted** — see `git status`: many new
-  files (`champion.py`, `stock_profile.py`, `causality.py`, `factors.py`,
-  `cross_sectional*.py`, `deflated_sharpe.py`, `mc_bootstrap.py`, `split.py`,
-  `strategy.py`, `market_data.py`, `docs/UPDATE_RUNBOOK.md`,
-  `docs/architecture/FINAL_ROADMAP.md`, `packages/obs/`, plus modified
-  `pyproject.toml`, `uv.lock`, `check_boundaries.py`).
+### 5.1 Git status
+- Current branch: `feat/dashboard-handoff` (based on the frozen-champion
+  lifecycle branch). `main` remains at PR14 and must not be touched.
+- The 16 rounds of work were committed in `c50dca5`; the cleanup described in
+  section 9 lands as a follow-up commit on `feat/dashboard-handoff`.
 
-### 5.2 Language mix (violates the English-docs rule)
-- `README.md` — **Chinese**, stale.
-- `docs/architecture/README.md`, `ACCEPTANCE.md`, `CONTRACT_CATALOG.md`,
-  `DEPENDENCY_RULES.md`, `STATE_MACHINE.md`, `MIGRATION_POLICY.md`,
-  `FOUNDATION_CLOSURE.md`, `EVIDENCE_REIMPLEMENTATION.md`, `milestones/M1_ACCEPTANCE.md`
-  — **Chinese** (early docs).
-- `docs/architecture/FINAL_ROADMAP.md`, `docs/UPDATE_RUNBOOK.md`,
-  `ADR-*.md` — English.
-- `champion.py` has 33 Chinese occurrences (comments, not UI). `render_dashboard.py`
-  has 219 Chinese (mostly UI text, which is fine — the user reads Chinese UI).
+### 5.2 Language policy (resolved)
+- `README.md` and all `docs/architecture/**/*.md` (including ADRs) are now
+  English.
+- Code comments and docstrings under apps/, packages/, services/, tools/, and
+  ops/ are English.
+- Chinese is retained only in user-facing UI/output strings, enforced by the
+  new `tools/check_language.py`.
 
-### 5.3 Possible leakage / verbosity in the front-end
-- `render_dashboard.py` contains internal quant jargon in user-facing text
-  (e.g. "frank-quant", "permutation importance", "label60", "DSR/MC").
-  Decide what a real user should see vs. what should stay in docs.
-- Several `<div class="sub">` helper sentences are verbose. Trim while keeping
-  the numbers/tables intact.
+### 5.3 Front-end audit (resolved)
+- Investor-facing pages (index, detail, model) no longer contain frank-quant,
+  label60, permutation importance, DSR, or MC.
+- `acceptance.html` intentionally keeps those terms because it is the technical
+  validation report.
+- Verbose `<div class="sub">` sentences were trimmed to one data-fact sentence;
+  all numbers, tables, and charts remain generated from `champion.json`.
 
 ### 5.4 Candidate dead code / redundancy
-- `/tmp/experiment.py`, `/tmp/land_chip.py`, `/tmp/merge_extended.py`,
-  `/tmp/land_extended.py`, `/tmp/sentiment_demo.py` — throwaway scripts that
-  should be deleted or promoted into `tools/` if still needed.
-- `runtime/dashboard/sentiment_demo.html` — demo page, superseded by the
-  integrated per-stock cards.
+- The previously listed `/tmp/*.py` throwaway scripts are gone from this machine
+  and no `/tmp/*.py` path is tracked in Git.
+- The obsolete demo page was deleted.
 - `runtime/` has ~22k files (raw data + generated HTML). Verify `.gitignore`
   covers all of it (AGENTS.md rule 9: runtime is never tracked).
 
@@ -132,9 +125,11 @@ tools/update.py                              -> orchestrator (intraday / full / 
 
 ### 6.2 Aliyun (front-end)
 - The dashboard is **pure static HTML** (`runtime/dashboard/`). Deploy by
-  copying `index.html`, `detail/*.html`, `model/*.html`, `acceptance.html` to
-  the Aliyun web root (or an OSS bucket). No server-side runtime needed.
-- **Need from user**: server host/credentials or OSS bucket name.
+  copying `index.html`, `detail/*.html`, `model/*.html`, and `acceptance.html`
+  to the Aliyun server (`root@47.77.231.22`, found in this machine's A-share
+  assistant project). No server-side runtime is needed; the server has 2 vCPU,
+  1.6 GiB RAM, and ~24 GiB free disk, which is ample for static hosting.
+- Target URL: `http://47.77.231.22/ashare-pilot-next/`.
 
 ## 7. Key conventions (do not break)
 
@@ -175,8 +170,8 @@ Finish the ashare-pilot-next handoff cleanup:
 3. README.md and every docs/architecture/*.md contain zero Chinese characters;
    code comments in apps/ tools/ packages/ services/ are English — Chinese is
    allowed only in render_dashboard.py's user-facing UI strings.
-4. Dead code removed: no /tmp/*.py scripts are committed, and
-   runtime/dashboard/sentiment_demo.html is deleted.
+4. Dead code removed: no /tmp/*.py scripts are committed and the obsolete demo
+   page is deleted.
 5. Front-end audit: render_dashboard.py user-facing text no longer contains
    internal terms (frank-quant, label60, permutation importance, DSR, MC), and
    verbose <div class="sub"> helper sentences are trimmed while keeping all

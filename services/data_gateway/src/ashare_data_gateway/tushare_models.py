@@ -4,10 +4,11 @@ All records are immutable (frozen dataclass + tuple containers).
 No adjusted prices, no derived fields — raw vendor data only.
 
 Field units (verified by live probe 2026-07-30):
-- daily.open/high/low/close: 元 (CNY, unadjusted)
-- daily.vol: 手 (lots, 1 lot = 100 shares)
-- daily.amount: 千元 (thousands of CNY)
-- adj_factor.adj_factor: 复权因子 (dimensionless multiplier, NOT applied here)
+- daily.open/high/low/close: CNY (unadjusted)
+- daily.vol: lots (1 lot = 100 shares)
+- daily.amount: thousands of CNY
+- adj_factor.adj_factor: adjustment factor (dimensionless multiplier,
+  NOT applied here)
 """
 
 from __future__ import annotations
@@ -172,9 +173,9 @@ class DailyBarRecord:
     Source: Tushare daily (verified 2026-07-30).
     Confirmed fields: ts_code, trade_date, open, high, low, close, vol, amount.
     Units:
-      - open/high/low/close: 元 (CNY, unadjusted)
-      - vol: 手 (lots, 1 lot = 100 shares)
-      - amount: 千元 (thousands of CNY)
+      - open/high/low/close: CNY (unadjusted)
+      - vol: lots (1 lot = 100 shares)
+      - amount: thousands of CNY
     """
 
     ts_code: str

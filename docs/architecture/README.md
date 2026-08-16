@@ -1,46 +1,49 @@
-# 架构入口
+# Architecture Entry Point
 
-本目录描述`ashare-pilot-next`当前有效的架构。仓库从空白根开始，旧项目只作为
-外部审计来源，不能成为构建或运行依赖。
+This directory describes the architecture currently in force for
+`ashare-pilot-next`. The repository starts from an empty Git root; the legacy
+project is only an external audit source and can never become a build or runtime
+dependency.
 
-## 已接受决定
+## Accepted Decisions
 
-| 决定 | 内容 |
+| Decision | Content |
 |---|---|
-| [ADR-001](decisions/ADR-001-clean-successor.md) | 新项目与旧项目物理隔离 |
-| [ADR-002](decisions/ADR-002-authority-boundaries.md) | `quant_core`、Research和Signal Runner职责 |
-| [ADR-003](decisions/ADR-003-versioned-datasets.md) | 历史研究和生产推理使用不可变数据集 |
-| [ADR-004](decisions/ADR-004-universe-contracts.md) | Universe是策略绑定的版本化合同 |
-| [ADR-005](decisions/ADR-005-state-and-holdings.md) | 降级状态和真实持仓边界 |
+| [ADR-001](decisions/ADR-001-clean-successor.md) | Physical isolation from the legacy project |
+| [ADR-002](decisions/ADR-002-authority-boundaries.md) | Responsibilities of `quant_core`, Research, and Signal Runner |
+| [ADR-003](decisions/ADR-003-versioned-datasets.md) | Historical research and production inference read immutable datasets |
+| [ADR-004](decisions/ADR-004-universe-contracts.md) | Universe is a versioned, strategy-bound contract |
+| [ADR-005](decisions/ADR-005-state-and-holdings.md) | Degraded states and the real-holdings boundary |
 
-## 依赖方向
+## Dependency Direction
 
 ```mermaid
 flowchart LR
-  provider["外部供应商"] --> gateway["Data Gateway"]
-  gateway --> dataset["不可变Dataset + Quality Manifest"]
+  provider["External Provider"] --> gateway["Data Gateway"]
+  gateway --> dataset["Immutable Dataset + Quality Manifest"]
   dataset --> research["Research"]
   dataset --> runner["Signal Runner"]
   core["quant_core"] --> research
   core --> runner
-  research --> champion["不可变Champion"]
+  research --> champion["Immutable Champion"]
   champion --> runner
   runner --> signal["Production Signal + Runtime Manifest"]
-  signal --> web["Web只读展示"]
-  ops["Ops"] -.编排与校验.-> gateway
-  ops -.编排与校验.-> research
-  ops -.编排与校验.-> runner
-  ops -.编排与校验.-> web
+  signal --> web["Read-only Web"]
+  ops["Ops"] -.orchestration and validation.-> gateway
+  ops -.orchestration and validation.-> research
+  ops -.orchestration and validation.-> runner
+  ops -.orchestration and validation.-> web
 ```
 
-Data Gateway不定义策略，Research不发布未晋级策略，Signal Runner不训练，Web
-不计算金融语义，Ops不决定仓位。
+Data Gateway does not define strategies. Research does not publish unpromoted
+strategies. Signal Runner does not train. Web does not compute financial
+semantics. Ops does not decide positions.
 
-## 配套文件
+## Companion Files
 
-- [合同总账](CONTRACT_CATALOG.md)
-- [依赖规则](DEPENDENCY_RULES.md)
-- [状态机](STATE_MACHINE.md)
-- [迁移政策](MIGRATION_POLICY.md)
-- [实证能力重建记录](EVIDENCE_REIMPLEMENTATION.md)
-- [首期验收标准](ACCEPTANCE.md)
+- [Contract Catalog](CONTRACT_CATALOG.md)
+- [Dependency Rules](DEPENDENCY_RULES.md)
+- [State Machine](STATE_MACHINE.md)
+- [Migration Policy](MIGRATION_POLICY.md)
+- [Evidence Reimplementation Record](EVIDENCE_REIMPLEMENTATION.md)
+- [Foundation Acceptance](ACCEPTANCE.md)

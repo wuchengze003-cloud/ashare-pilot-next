@@ -307,7 +307,7 @@ CLOSED_REASON = {"stop": "止损", "profit": "止盈", "signal": "信号失效",
 
 
 def _closed_trades_section(closed_trades, holdings):
-    """Per-trade win/loss (方案 B): summary + closed-round-trip table + open float."""
+    """Per-trade win/loss: summary + closed-round-trip table + open float."""
     if not closed_trades:
         return '<div class="sub">暂无闭环交易</div>'
     n = len(closed_trades)
@@ -354,7 +354,7 @@ def _closed_trades_section(closed_trades, holdings):
         )
 
     html = f'''<div class="cards seg" style="grid-template-columns:repeat(5,1fr)">{summary}</div>
-<div class="sub" style="margin-bottom:8px">每笔闭环交易（买入→卖出）· 共 {n} 笔 · 点击页码翻页。红涨绿跌。</div>
+<div class="sub" style="margin-bottom:8px">共 {n} 笔闭环交易（买入→卖出），点击页码翻页。</div>
 <div id="closed-table"></div>
 <h2 style="margin-top:20px">未平仓持仓（当前浮盈）</h2>
 <table><thead><tr><th>代码</th><th>名称</th><th>买入价</th><th>现价</th><th>持股数</th><th>浮盈</th></tr></thead><tbody>{open_rows}</tbody></table>'''
@@ -404,7 +404,7 @@ def _daily_signals_section(daily_signals):
     if not daily_signals:
         return '<div class="sub">暂无历史信号</div>'
     data_js = json.dumps(daily_signals, ensure_ascii=False)
-    html = '''<div class="sub" style="margin-bottom:10px">每个交易日收盘后的信号。日历里<b>绿色=有信号</b>、<b>灰色=空仓</b>；点击日期看当天 Top 10（含信号价、市值、行业）。</div>
+    html = '''<div class="sub" style="margin-bottom:10px">每日收盘后的信号：<b>绿色=有信号</b>、<b>灰色=空仓</b>；点击日期查看当天 Top 10。</div>
 <div class="cal-nav">
   <button class="page-btn" onclick="calShift(-1)">‹ 上月</button>
   <span id="cal-title" style="font-weight:600;color:var(--text)"></span>
@@ -610,8 +610,7 @@ def _cashout_table(cashout_history, trades):
         _cashout_row(h, buy_dates) for h in cashout_history
     )
     return (
-        f'<div class="sub" style="margin-bottom:8px">共 {len(cashout_history)} 次空仓：'
-        f'大盘跌破均线 → 清仓；重新站上均线 → 重新买入。完整周期如下：</div>'
+        f'<div class="sub" style="margin-bottom:8px">共 {len(cashout_history)} 次空仓：大盘跌破均线清仓，重新站上均线后买入。</div>'
         f'<div style="max-height:300px;overflow-y:auto"><table>'
         f'<thead><tr><th>空仓日期</th><th>重新买入日期</th><th>空仓时长</th><th>触发原因</th></tr></thead>'
         f'<tbody>{rows}</tbody></table></div>'
@@ -795,8 +794,8 @@ a {{ color:inherit; text-decoration:none; }}
 <div class="container">
 <header>
   <h1>{data.get('strategy', '每日选股信号')}</h1>
-  <div class="sub">{data.get('model_note', '')} · 信号日期 {data['signal_date']}（收盘后生成，次日开盘执行）· 计划买入 {len(data['signals'])} 只 · 初始资金 {cfg.get('initial_cash', 1000000) / 10000:.0f} 万</div>
-  <div class="sub" style="margin-top:6px"><a href="acceptance.html">📋 查看模型验收报告（对照 frank-quant 标准）→</a></div>
+  <div class="sub">信号日期 {data['signal_date']}（收盘后生成，次日开盘执行）· 计划买入 {len(data['signals'])} 只 · 初始资金 {cfg.get('initial_cash', 1000000) / 10000:.0f} 万</div>
+  <div class="sub" style="margin-top:6px"><a href="acceptance.html">📋 模型验收报告 →</a></div>
 </header>
 
 <div class="cards">{cards}</div>
@@ -820,7 +819,7 @@ a {{ color:inherit; text-decoration:none; }}
     </svg>
     <div id="nav-tip" class="nav-tip" style="display:none"></div>
   </div>
-  <div class="sub" style="margin-top:6px">鼠标悬浮看每日净值；黄色虚线是模型重训点，点击 M 编号跳转到该模型页（完整 27 因子权重 + 训练/验证表现）。</div>
+  <div class="sub" style="margin-top:6px">悬停查看每日净值；黄线为模型重训点，点击 M 编号查看该模型。</div>
 </section>
 <script>
 const NAV_PTS = {nav_js};
@@ -856,13 +855,13 @@ const BENCH_PTS = {bench_js};
 
 <section>
   <h2>计划买入（{data['signal_date']} 收盘后信号，次日开盘执行 · 每只约 {100 / cfg.get('top_k', 10):.0f} 万）</h2>
-  <div class="sub" style="margin-bottom:12px">按 100 万初始资金等权测算：每只列出 8 个关键特征 + 全市场排名。点击卡片看日线 K 线 + 买卖点。</div>
+  <div class="sub" style="margin-bottom:12px">按 100 万初始资金等权测算，点击卡片查看日线与买卖点。</div>
   <div class="stock-grid">{signals_cards}</div>
 </section>
 
 <section>
   <h2>当前实际持仓（回测中至今仍持有 · 总仓位 {total_pos * 100:.0f}%）</h2>
-  <div class="sub" style="margin-bottom:12px">这是回测组合截至 {data['signal_date']} 真实持有的股票（等权满仓，每只约 {100 / max(len(data.get('current_holdings', [])) or 1, 1):.1f}%），与上方"计划买入"是两回事。</div>
+  <div class="sub" style="margin-bottom:12px">回测组合截至 {data['signal_date']} 的实际持仓，等权满仓，每只约 {100 / max(len(data.get('current_holdings', [])) or 1, 1):.1f}%（与计划买入不同）。</div>
   {holdings_table}
 </section>
 
@@ -875,14 +874,14 @@ const BENCH_PTS = {bench_js};
   <h2>因子重要性（模型从 {cfg.get('n_features', 0)} 个特征里学到了什么）</h2>
   <div class="chart">
     <svg viewBox="0 0 {W} 360" width="100%" preserveAspectRatio="xMidYMid meet">{imp_bars}</svg>
-    <div class="sub" style="margin-top:6px">Permutation importance：打乱某特征后模型误差上升越多，说明该特征越关键。</div>
+    <div class="sub" style="margin-top:6px">柱越长，该因子对模型越重要。</div>
   </div>
 </section>
 
 <section>
   <h2>因子有效性演化（全部 27 因子 · 可勾选 · 悬浮看数值）</h2>
   {ic_chart}
-  <div class="sub" style="margin-top:6px">纵轴是因子 IC（信息系数，与未来收益的横截面相关性，&gt;0 表示有效）；横轴是重训时间。默认勾选 6 个最强因子，可自行勾选/取消任意因子查看其演化；鼠标悬浮在图上可看该重训点所有已勾选因子的精确 IC。</div>
+  <div class="sub" style="margin-top:6px">数值越大，因子与未来收益的关系越强；默认展示最强 6 个因子，可勾选切换。</div>
 </section>
 
 <section>
@@ -902,7 +901,7 @@ const BENCH_PTS = {bench_js};
   <h2>分年度收益</h2>
   <div class="chart">
     <svg viewBox="0 0 {W} 160" width="100%" preserveAspectRatio="xMidYMid meet">{yearly_bars}</svg>
-    <div class="sub" style="margin-top:6px">红=正收益，绿=负收益（A 股惯例）。2023 熊市为空仓（择时躲过）。</div>
+    <div class="sub" style="margin-top:6px">红=正收益，绿=负收益；2023 熊市为空仓。</div>
   </div>
 </section>
 
@@ -987,7 +986,7 @@ def _subjective_analysis(card: dict, extended: dict | None = None) -> str:
             pts.append("估值合理（PE 20~50）")
         else:
             pts.append("估值偏高（PE>50）")
-    roe = f.get("roe")  # 年化ROE
+    roe = f.get("roe")  # annualized ROE
     if roe is not None:
         if roe > 15:
             pts.append("盈利优秀（年化ROE>15%）")
@@ -1017,7 +1016,7 @@ def _subjective_analysis(card: dict, extended: dict | None = None) -> str:
 
 
 def _profile_section(card: dict, extended: dict | None = None) -> str:
-    """In-page research card: 估值 + 财务(四组) + 资金面 + 筹码/评级 + 概念/一致预期/新闻."""
+    """In-page research card: valuation + four financial groups + funding + chips/rating."""
     if not card:
         return ""
     v = card.get("valuation", {})
@@ -1153,7 +1152,7 @@ def _profile_section(card: dict, extended: dict | None = None) -> str:
     analysis = _subjective_analysis(card, extended)
     report = f.get("report_date", "")
 
-    # ---- 扩展数据（概念题材 + 一致预期 + 新闻，紧凑并入个股档案卡片）----
+    # ---- Extended data (concepts + consensus + news, compactly merged into the card).
     ext_blocks = ""
     if extended:
         concepts = extended.get("concepts", [])
@@ -1197,7 +1196,7 @@ def _profile_section(card: dict, extended: dict | None = None) -> str:
   <div class="pf-note" style="margin-bottom:10px"><b>一句话解读：</b>{analysis}</div>
   {core_html}
   {ext_blocks}
-  <div class="sub" style="margin-top:10px">财务报告期 {report} · 数据来自 tushare/连接器结构化接口（可追溯）· 解读为规则化判断，不构成投资建议。</div>
+  <div class="sub" style="margin-top:10px">财务报告期 {report} · 数据来自结构化接口 · 规则化解读，不构成投资建议。</div>
 </div>"""
 
 
@@ -1477,17 +1476,17 @@ h2 {{ font-size:15px; color:var(--blue); margin:22px 0 10px; }}
     <div class="kv-item">训练窗口 <b>{me.get('train_start', '')} ~ {me.get('train_end', '')}</b>（{me.get('n_train_days', 0)} 天）</div>
     <div class="kv-item">内部验证 <b>{me.get('valid_start', '')} ~ {me.get('valid_end', '')}</b>（{me.get('n_valid_days', 0)} 天）</div>
   </div>
-  <div class="sub" style="margin-top:8px">目标函数 = 验证集 IC − 0.5 × max(0, 训练集 IC − 验证集 IC)。落差惩罚用于抑制"训练好、验证差"的过拟合模型。</div>
+  <div class="sub" style="margin-top:8px">目标函数 = 验证集 IC − 0.5 × max(0, 训练集 IC − 验证集 IC)。</div>
 </div>
 
-<h2>完整 27 因子权重（Permutation Importance，按贡献排序）</h2>
+<h2>完整 27 因子权重（按贡献排序）</h2>
 <div class="panel">
   {''.join(bars)}
-  <div class="sub" style="margin-top:10px">权重 = 打乱该因子后模型预测误差的增量，越大说明模型越依赖它。这是模型"具体用了哪些因子、各占多大权重"的可观测证据。</div>
+  <div class="sub" style="margin-top:10px">柱越长，表示该因子对模型越重要。</div>
 </div>
 
 <div class="note">
-<strong>可观测验证（frank-quant 风格）</strong>：本模型每个滚动点都记录了训练/验证切分、训练集 IC、验证集 IC、落差惩罚、目标函数得分与完整因子权重。点击净值曲线上的其他 M 编号可横向对比不同时期模型如何进化。全局显著性由 Deflated Sharpe（8 个真实 trials）与 MC bootstrap 统一验证。
+<strong>可观测验证</strong>：每个滚动点均记录训练/验证切分、训练集 IC、验证集 IC、落差惩罚、目标函数得分与完整因子权重；全局显著性由统计检验统一验证。
 </div>
 </div>
 </body>

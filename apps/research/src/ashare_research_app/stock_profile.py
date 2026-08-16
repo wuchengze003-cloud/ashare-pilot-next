@@ -1,11 +1,12 @@
-"""Stock profile generator — an INDEPENDENT, low-coupling research module.
+"""Stock profile generator — an independent, low-coupling research module.
 
-Generates a per-stock "research card" (行业 / 估值 / 财务 / 资金面) for the
-current holdings + latest signals, WITHOUT touching the champion strategy.
+Generates a per-stock "research card" (industry / valuation / financials /
+funding) for the current holdings + latest signals, WITHOUT touching the
+champion strategy.
 
 Outputs: runtime/stock-profiles/{code}.json
 Data sources (all already wired or fetched via teajoin):
-    - industry:  runtime/sw_industry.json (申万一级)
+    - industry: runtime/sw_industry.json (Shenwan Level-1)
     - valuation: runtime/alt-data/daily_basic (circ_mv, pe_ttm, pb, dv_ttm)
     - financials: fina_indicator via teajoin (roe, margins, yoy growth) -> cached
     - moneyflow: runtime/alt-data/moneyflow (net_mf_amount)
@@ -123,7 +124,7 @@ def generate(root: Path) -> list[dict]:
         f = _to_float(v)
         return round(f, 3) if f is not None else None
 
-    def _yi(v):  # 元 -> 亿
+    def _yi(v):  # CNY -> hundred-million CNY
         f = _to_float(v)
         return round(f / 1e8, 2) if f is not None else None
 
@@ -141,23 +142,23 @@ def generate(root: Path) -> list[dict]:
             if b and b > 0:
                 holder_chg = round(float((b - a) / a), 4)
 
-        # margin (融资融券)
+        # margin trading (financing and securities lending)
         mg_sym = margin[margin["ts_code"] == code].tail(1)
         margin_block = None
         if len(mg_sym):
             r = mg_sym.iloc[0]
             margin_block = {
                 "date": str(r["trade_date"].date()),
-                "rzye": _yi(r.get("rzye")),        # 融资余额(亿)
-                "rzmre": _yi(r.get("rzmre")),      # 融资买入额(亿)
-                "rqye": _yi(r.get("rqye")),        # 融券余额(亿)
+                "rzye": _yi(r.get("rzye")),        # financing balance (100m CNY)
+                "rzmre": _yi(r.get("rzmre")),      # financing buy amount (100m CNY)
+                "rqye": _yi(r.get("rqye")),        # securities lending balance (100m CNY)
             }
 
-        # north-bound (北向十大成交)
+        # north-bound top-10 traded names
         north_sym = north[north["ts_code"] == code].tail(20)
         north_block = None
         if len(north_sym):
-            # net_amount 近期常为 None，用 buy - sell 兜底
+            # net_amount is often None recently; fall back to buy - sell
             na = pd.to_numeric(north_sym["net_amount"], errors="coerce")
             if "buy" in north_sym.columns and "sell" in north_sym.columns:
                 na = na.fillna(
@@ -172,7 +173,7 @@ def generate(root: Path) -> list[dict]:
                 "n_days": int(len(north_sym)),
             }
 
-        # dragon-tiger list (龙虎榜, recent)
+        # dragon-tiger list (recent)
         lhb_sym = lhb[lhb["ts_code"] == code].tail(3)
         lhb_block = []
         for _, r in lhb_sym.iterrows():
@@ -187,33 +188,34 @@ def generate(root: Path) -> list[dict]:
             "name": names.get(code, ""),
             "industry": industry.get(code, ""),
             "valuation": {
-                "market_cap": _num(db_row["circ_mv"].iloc[0] * 1e-4) if len(db_row) else None,  # 亿
+                # hundred-million CNY
+                "market_cap": _num(db_row["circ_mv"].iloc[0] * 1e-4) if len(db_row) else None,
                 "pe_ttm": _num(db_row["pe_ttm"].iloc[0]) if len(db_row) else None,
                 "pb": _num(db_row["pb"].iloc[0]) if len(db_row) else None,
                 "dv_ttm": _num(db_row["dv_ttm"].iloc[0]) if len(db_row) else None,
                 "turnover_rate": _num(db_row["turnover_rate"].iloc[0]) if len(db_row) else None,
             },
             "financials": {
-                # 盈利质量
-                "roe": _num(fin.get("roe_yearly")),          # 年化ROE（主指标）
-                "roe_dt": _num(fin.get("roe_dt")),           # 扣非ROE
-                "roic": _num(fin.get("roic")),               # 投入资本回报率
+                # Profitability quality.
+                "roe": _num(fin.get("roe_yearly")),          # annualized ROE (primary)
+                "roe_dt": _num(fin.get("roe_dt")),           # ROE excluding non-recurring items
+                "roic": _num(fin.get("roic")),               # return on invested capital
                 "netprofit_margin": _num(fin.get("netprofit_margin")),
                 "gross_margin": _num(fin.get("grossprofit_margin")),
-                # 成长
+                # Growth.
                 "netprofit_yoy": _num(fin.get("netprofit_yoy")),
                 "dt_netprofit_yoy": _num(fin.get("dt_netprofit_yoy")),
                 "revenue_yoy": _num(fin.get("or_yoy")),
-                "q_op_qoq": _num(fin.get("q_op_qoq")),        # 单季净利环比
-                # 偿债/结构
+                "q_op_qoq": _num(fin.get("q_op_qoq")),        # single-quarter net profit QoQ
+                # Solvency and capital structure.
                 "debt_to_assets": _num(fin.get("debt_to_assets")),
                 "quick_ratio": _num(fin.get("quick_ratio")),
-                "netdebt": _yi(fin.get("netdebt")),           # 净负债(亿)，负=净现金
-                "interestdebt": _yi(fin.get("interestdebt")),  # 有息负债(亿)
-                # 现金流/每股
-                "ocfps": _num(fin.get("ocfps")),              # 每股经营现金流
-                "fcff": _yi(fin.get("fcff")),                 # 自由现金流(亿)
-                "bps": _num(fin.get("bps")),                  # 每股净资产
+                "netdebt": _yi(fin.get("netdebt")),  # 100m CNY; negative = net cash
+                "interestdebt": _yi(fin.get("interestdebt")),  # interest-bearing debt (100m CNY)
+                # Cash flow and per-share metrics.
+                "ocfps": _num(fin.get("ocfps")),              # operating cash flow per share
+                "fcff": _yi(fin.get("fcff")),                 # free cash flow (100m CNY)
+                "bps": _num(fin.get("bps")),                  # book value per share
                 "eps": _num(fin.get("eps")),
                 "report_date": str(fin.get("end_date", ""))[:10],
             },

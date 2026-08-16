@@ -1,21 +1,27 @@
-# ADR-001：建立独立的新生产项目
+# ADR-001: Build a New, Physically Isolated Production Project
 
-- 状态：已接受
-- 日期：2026-07-29
+- Status: accepted
+- Date: 2026-07-29
 
-## 决定
+## Decision
 
-`ashare-pilot-next`从空白Git根建设。旧`ashare-pilot`在新系统完成影子运行和验收
-前保持原状。未来切换时，旧项目改名为Legacy，新项目继承生产项目名称。
+`ashare-pilot-next` is built from an empty Git root. The legacy `ashare-pilot`
+stays unchanged until the new system completes shadow operation and acceptance.
+At the future switch, the legacy project is renamed Legacy and the new project
+inherits the production name.
 
-## 约束
+## Constraints
 
-1. 不复制旧策略、旧TypeScript回测、旧Dashboard、历史报告或runtime。
-2. 旧能力只能通过独立任务审计迁入。
-3. 迁入代码必须符合当前合同、依赖方向和测试要求。
-4. 新项目不知道Legacy的本机路径、远程地址或部署状态。
-5. 旧系统的删除和归档不属于本仓库任务。
+1. Do not copy legacy strategies, legacy TypeScript backtests, legacy Dashboard,
+   historical reports, or runtime.
+2. Legacy capabilities may only be migrated through independent audited tasks.
+3. Migrated code must comply with current contracts, dependency direction, and
+   test requirements.
+4. The new project never knows Legacy's machine paths, remote addresses, or
+   deployment state.
+5. Deleting and archiving the legacy system is outside this repository's scope.
 
-## 后果
+## Consequences
 
-当前仓库没有兼容期和Legacy fallback。缺失能力保持缺失，直到新的实现通过验收。
+The current repository has no compatibility period and no Legacy fallback.
+Missing capabilities stay missing until a new implementation passes acceptance.

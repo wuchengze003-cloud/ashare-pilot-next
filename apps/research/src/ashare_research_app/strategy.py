@@ -54,9 +54,9 @@ class HoldResult:
 
     def describe(self) -> str:
         return (
-            f"年化 {self.annual_return:7.2%} 夏普 {self.sharpe:5.2f} "
-            f"回撤 {self.max_drawdown:7.2%} 日均换手 {self.daily_turnover.mean():6.2%} "
-            f"交易 {self.n_trades} 笔"
+            f"annual {self.annual_return:7.2%} sharpe {self.sharpe:5.2f} "
+            f"maxdd {self.max_drawdown:7.2%} turnover {self.daily_turnover.mean():6.2%} "
+            f"trades {self.n_trades}"
         )
 
 

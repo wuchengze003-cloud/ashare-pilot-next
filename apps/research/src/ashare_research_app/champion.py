@@ -78,8 +78,8 @@ FEATURE_LABELS = {
 }
 
 # Key explainable features shown per stock (attribution), with a friendly unit.
-# unit semantics: "pct" = decimal -> percent (*100); "pct_raw" = already percent;
-# "num" = raw number; "mktcap" = 万元 -> 亿元 (*1e-4).
+# Unit semantics: "pct" = decimal -> percent (*100); "pct_raw" = already percent;
+# "num" = raw number; "mktcap" = ten-thousand CNY -> hundred-million CNY (*1e-4).
 KEY_FEATURES = [
     ("ret_60d", "60日涨幅", "pct"),
     ("ret_20d", "20日涨幅", "pct"),
@@ -151,7 +151,10 @@ def _load_symbol_names(root: Path) -> dict[str, str]:
 
 
 def _load_industry(root: Path) -> dict[str, str]:
-    """申万一级行业映射（ts_code -> industry name），采集自 index_member_all."""
+    """Shenwan Level-1 industry mapping (ts_code -> industry name).
+
+    Sourced from index_member_all.
+    """
     p = root / "runtime/sw_industry.json"
     if not p.exists():
         return {}
@@ -518,8 +521,9 @@ def paper_backtest(
     prev_close_p = panel.assign(_pc=pc).pivot_table(
         index="trade_date", columns="symbol", values="_pc")
 
-    # Tiered slippage by float market cap (万元). Small names really do cost more
-    # to trade; probed 2026-08-16: -1.1pp vs flat 0.15%, worth it for realism.
+    # Tiered slippage by float market cap (ten-thousand CNY). Small names really
+    # do cost more to trade; probed 2026-08-16: -1.1pp vs flat 0.15%, worth it
+    # for realism.
     circ_mv = panel.drop_duplicates("symbol").set_index("symbol")["circ_mv"]
 
     def slippage(sym: str) -> float:
@@ -573,8 +577,8 @@ def paper_backtest(
                                "price": round(float(price), 2), "reason": reason})
         # ---- buys ----
         if sc > 0.0 and sd in fit.predictions:
-            # dynamic budget = current total assets / TOP_K (keeps full-invested
-            # equal weight as the account compounds, instead of a fixed 12.5万)
+            # Dynamic budget = current total assets / TOP_K (keeps full-invested
+            # equal weight as the account compounds, instead of a fixed 125k CNY).
             c0 = close_p.loc[buy_day]
             mv = 0.0
             for _sym, h in holdings.items():
@@ -712,7 +716,7 @@ def generate(root: Path) -> dict:
                     if unit == "pct":
                         val = float(val) * 100.0
                     elif unit == "mktcap":
-                        val = float(val) * 1e-4  # 万元 -> 亿元
+                        val = float(val) * 1e-4  # ten-thousand CNY -> hundred-million CNY
                     pctl = float((col <= r[f]).mean()) if col.notna().sum() > 0 else np.nan
                     attribution.append({
                         "feature": f,
@@ -730,7 +734,8 @@ def generate(root: Path) -> dict:
                 "name": names.get(str(s), ""),
                 "industry": industry.get(str(s), ""),
                 "score": float(round(float(sc), 4)),
-                "market_cap": float(mv.get(s, np.nan)) * 1e-4,  # 万元 -> 亿元
+                # ten-thousand CNY -> hundred-million CNY
+                "market_cap": float(mv.get(s, np.nan)) * 1e-4,
                 "weight": round(1.0 / TOP_K, 4),
                 "close": round(close_price, 2),
                 "shares": shares,
@@ -858,8 +863,8 @@ def generate(root: Path) -> dict:
 
     # historical daily signals: top-k for every trading day (history view).
     # A day where the market-timing scale is 0 (flat) shows NO names — the
-    # strategy was out of the market, so the signal must say "空仓", not list
-    # 10 stocks it would never have held.
+    # Strategy was out of the market, so the signal must report a flat book,
+    # not list 10 stocks it would never have held.
     daily_signals: list[dict] = []
     for d in sorted(fit.predictions.keys()):
         flat = d in scale.index and float(scale.loc[d]) == 0.0

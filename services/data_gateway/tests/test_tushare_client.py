@@ -1107,7 +1107,7 @@ class TestTransientCodeClassification:
         assert _is_transient_code(code) is False
 
     def test_permission_error_not_transient(self) -> None:
-        """Codes with '限制' in msg are NOT retried (fail-closed)."""
+        """Codes with a permission-limit message are NOT retried (fail-closed)."""
         # Previously keyword heuristic would retry these; now only code matters
         assert _is_transient_code(40203) is False
 

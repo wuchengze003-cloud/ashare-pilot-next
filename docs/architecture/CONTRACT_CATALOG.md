@@ -1,117 +1,156 @@
-# 合同总账
+# Contract Catalog
 
-每项合同必须有唯一Schema、版本、生产者、消费者、日期语义、失败行为和黄金样例。
+Every contract must have a unique schema, version, producer, consumer, date
+semantics, failure behavior, and golden examples.
 
-| 合同 | 生产者 | 消费者 | 失败行为 |
+| Contract | Producer | Consumer | Failure behavior |
 |---|---|---|---|
-| Dataset Manifest | Data Gateway | Research、Signal Runner | 不读取数据集 |
-| Universe | Data Gateway/受控成员任务 | Research、Signal Runner | 阻断候选或推理 |
-| Coverage Audit | Data Gateway | Ops、Research治理 | 阻断不完整历史数据集 |
-| Cost Model | 架构负责人 | quant_core | 无唯一日期/市场费率段时阻断回测和推理 |
-| Market Rules | 架构负责人 | quant_core | 阻断相关证券 |
-| Execution Policy | 架构负责人 | quant_core | 阻断回测和目标生成 |
-| Portfolio Risk | 风险负责人 | quant_core、Signal Runner | 阻断目标发布 |
-| Experiment Config | Research | Research | 实验无效 |
-| Promotion Gate | Research治理 | Research | 不晋级 |
-| Champion | Research晋级流程 | Signal Runner、Web | 按状态机降级 |
-| Strategy Adapter | Research晋级流程 | Signal Runner | 不加载或按状态机保持上一目标 |
-| Production Signal | Signal Runner | Web、未来执行适配器 | 不展示为新目标 |
-| Signal Head | Signal Runner | Signal Runner、Web、Ops | 不切换当前生产信号 |
-| Runtime Manifest | Signal Runner/Ops | Web、审计 | 不发布 |
-| Stage Health | 各阶段 | Ops、Web运维面 | 阻断后续阶段 |
+| Dataset Manifest | Data Gateway | Research, Signal Runner | Dataset is not read |
+| Universe | Data Gateway/controlled membership task | Research, Signal Runner | Candidate or inference is blocked |
+| Coverage Audit | Data Gateway | Ops, Research governance | Incomplete historical dataset is blocked |
+| Cost Model | Architecture owner | quant_core | Backtest and inference are blocked when no unique date/market rate segment exists |
+| Market Rules | Architecture owner | quant_core | Relevant securities are blocked |
+| Execution Policy | Architecture owner | quant_core | Backtest and target generation are blocked |
+| Portfolio Risk | Risk owner | quant_core, Signal Runner | Target publication is blocked |
+| Experiment Config | Research | Research | Experiment is invalid |
+| Promotion Gate | Research governance | Research | No promotion |
+| Champion | Research promotion flow | Signal Runner, Web | Degrade per the state machine |
+| Strategy Adapter | Research promotion flow | Signal Runner | Do not load, or keep the previous target per the state machine |
+| Production Signal | Signal Runner | Web, future execution adapter | Do not display as the new target |
+| Signal Head | Signal Runner | Signal Runner, Web, Ops | Do not switch the current production signal |
+| Runtime Manifest | Signal Runner/Ops | Web, audit | Do not publish |
+| Stage Health | Each stage | Ops, Web operations | Block downstream stages |
 
 ## Dataset Manifest 2.0
 
-- 记录数据族、标准化记录Schema摘要、标准化版本、来源版本和父Manifest。
-- 每个文件记录内容哈希、字节数、行数和交易日期范围。
-- Signal Runner对同一次读取的字节完成哈希、解析、主键和日期校验，再构造不可变
-  `DatasetSnapshot`；策略不能获得数据目录、路径或文件句柄。
-- `DatasetSnapshot`只包含`trade_date <= as_of`的记录，其哈希由数据族、日期、
-  Schema、标准化版本和规范化可见记录生成。
+- Records data family, normalized record-schema summary, normalization version,
+  source version, and parent Manifest.
+- Every file records content hash, byte count, line count, and trading-date range.
+- Signal Runner hashes, parses, and validates primary keys and dates on the same
+  bytes it reads once, then constructs an immutable `DatasetSnapshot`; strategies
+  never receive the data directory, paths, or file handles.
+- `DatasetSnapshot` contains only records with `trade_date <= as_of`; its hash is
+  generated from data family, date, schema, normalization version, and normalized
+  visible records.
 
 ## Coverage Audit 1.0
 
-- 逐个开放交易日重建点时成员，并用证券上市、退市日期截断有效范围。
-- 每个预期成员日必须有行情或明确停牌证明；零观测成员不得被静默跳过。
-- 可选的成员数量约束逐日执行，异常日期作为结构化证据输出。
-- 审计数字由当前输入实时生成，不接受旧报告数字作为通过依据。
+- Rebuild point-in-time membership for every open trading day and truncate
+  validity by listing and delisting dates.
+- Every expected member-day must have bars or explicit suspension evidence;
+  zero-observation members must never be silently skipped.
+- Optional per-day member-count constraints are enforced daily; anomalous days
+  are emitted as structured evidence.
+- Audit numbers are generated live from the current inputs; old report numbers
+  are never accepted as proof.
 
 ## Coverage Audit 2.0
 
-- 保留1.0 Schema和黄金样例不变；合同注册表以`contract_id + schema_version`
-  作为唯一身份，两个主版本可同时被审计。
-- 每个开市成员日只分类一次，顺序固定为行情、已过滤的
-  `suspend_type == "S"`停牌证据、当日退市、无解释缺失。复牌记录不得进入停牌键。
-- 退市日无行情和停牌证据时，输出一条`expected_delisted_member_days`记录；
-  退市日之后不再是预期成员日。
-- 分类数必须满足
-  `expected_member_days = bar_member_days + suspended_member_days + expected_delisted_member_day_count + len(missing_member_days)`。
-- `provenance_warnings`以结构化原因码保留数据来源告警。非官方供应商端点必须包含
-  `NON_OFFICIAL_VENDOR_ENDPOINT`；该告警本身不使覆盖审计失败。
+- Keeps the 1.0 schema and golden examples unchanged; the contract registry uses
+  `contract_id + schema_version` as identity, so both major versions can be
+  audited at once.
+- Each open member-day is classified exactly once, in the fixed order of bars,
+  filtered `suspend_type == "S"` suspension evidence, same-day delisting, and
+  unexplained missing. Resume records must not enter the suspension key.
+- When a delisting day has neither bars nor suspension evidence, emit one
+  `expected_delisted_member_days` record; days after the delisting day are no
+  longer expected member-days.
+- Classification counts must satisfy
+  `expected_member_days = bar_member_days + suspended_member_days + expected_delisted_member_day_count + len(missing_member_days)`.
+- `provenance_warnings` keep data-source warnings as structured reason codes.
+  Non-official vendor endpoints must include
+  `NON_OFFICIAL_VENDOR_ENDPOINT`; that warning alone does not fail the audit.
 
 ## Universe 2.0
 
-- 每日Universe是点时成员快照，同时声明稳定的生成规则ID和版本。
-- `UniverseSnapshot`哈希由规则身份、日期和规范化成员生成。
-- 当日成员内容可以变化；生成规则ID或版本变化属于合同漂移。
+- The daily Universe is a point-in-time membership snapshot that also declares a
+  stable generation-rule ID and version.
+- The `UniverseSnapshot` hash is generated from rule identity, date, and
+  normalized members.
+- Member content may change day to day; a change in generation-rule ID or version
+  is contract drift.
 
 ## Production Signal 4.0
 
-- 使用`contract_set`分别绑定当日Dataset Manifest、点时Dataset Snapshot、
-  点时Universe Snapshot、Champion、成本、市场规则、执行规则、组合风险、
-  代码、配置和锁文件哈希。
-- `HOLD`与`REDUCE_ONLY`必须引用并加载上一份完整信号。
-- 每份信号带单调递增序号、前序信号哈希和前链头哈希；首份信号序号固定为1。
-- `HOLD`目标必须与上一有效目标相同。
-- `REDUCE_ONLY`不得新增证券，也不得提高任何证券目标权重。
-- Signal Runner构建完成后必须再次通过正式JSON Schema，验证失败不得发布。
+- Uses `contract_set` to bind separately the day's Dataset Manifest,
+  point-in-time Dataset Snapshot, point-in-time Universe Snapshot, Champion,
+  cost, market rules, execution rules, portfolio risk, code, config, and
+  lockfile hashes.
+- `HOLD` and `REDUCE_ONLY` must reference and load the previous complete signal.
+- Every signal has a monotonically increasing sequence, previous-signal hash, and
+  previous-head hash; the first signal sequence is fixed at 1.
+- A `HOLD` target must equal the previous valid target.
+- `REDUCE_ONLY` must not add securities and must not raise any security's target
+  weight.
+- After Signal Runner builds the output it must pass the formal JSON Schema again;
+  validation failure means no publication.
 
 ## Signal Head 1.0
 
-- 链头绑定当前运行、当前信号、信号内容哈希、序号、日期和前链头哈希。
-- 新运行只能从当前已提交链头继续；旧链头、跳号、未来信号和并发分叉均不得切换。
-- 运行目录先以`COMMITTED`标记完整提交，随后再原子替换当前链头。消费者只通过
-  当前链头读取自校验通过的运行目录。
-- 运行目录提交后、链头切换前失败会留下未激活的完整目录；使用相同不可变产物
-  重试即可恢复。链头切换后落盘确认失败同样允许幂等重试。
+- The head binds the current run, current signal, signal content hash, sequence,
+  date, and previous-head hash.
+- A new run may only continue from the current committed head; old heads, skipped
+  sequences, future signals, and concurrent forks must not switch it.
+- The run directory is first marked `COMMITTED` as a complete commit, then the
+  current head is atomically replaced. Consumers read self-verified run
+  directories only through the current head.
+- A failure after the run directory commits but before the head switch leaves an
+  unactivated complete directory; retrying with the same immutable artifacts
+  recovers. A disk-confirmation failure after the head switch may also retry
+  idempotently.
 
 ## Cost Model 2.0
 
-- 券商佣金是账户级假设；监管费用必须引用公开依据。
-- 每次计算显式传入交易日期、市场和买卖方向。
-- 印花税和过户费按日期段、方向分别计算，逐项按合同规则取整后再求和。
-- 同一市场的日期段必须连续、不重叠，最后一段必须开放；找不到唯一费率段时失败关闭。
-- 滑点和市场冲击属于Execution Policy，不得重复并入Cost Model。
-- 当前首个受支持日期为`2022-04-29`，首版市场为沪深A股；更早日期和北交所
-  在补齐经审核费率前不得回测。
+- Broker commission is an account-level assumption; regulatory fees must cite a
+  public basis.
+- Every calculation receives the trading date, market, and buy/sell direction
+  explicitly.
+- Stamp duty and transfer fees are calculated separately by date segment and
+  direction, rounded per contract rule item by item, then summed.
+- Date segments for one market must be continuous and non-overlapping, and the
+  final segment must be open-ended; when no unique rate segment exists, fail
+  closed.
+- Slippage and market impact belong to the Execution Policy and must not be
+  duplicated in the Cost Model.
+- The first supported date is `2022-04-29` and the first markets are SSE/SZSE
+  A-shares; earlier dates and BSE must not be backtested before audited rates are
+  added.
 
 ## Champion 3.0
 
-- `promotion_evidence`保存晋级时的数据Manifest、Dataset Snapshot和Universe
-  Snapshot哈希，仅作为不可变审计证据。
-- `promotion_compatibility`绑定未来运行必须保持的数据族、记录Schema、标准化版本、
-  Universe规则ID和规则版本。
-- `fixed_contract_set`绑定成本、市场规则、执行规则、组合风险、策略代码、配置和
-  锁文件哈希，这些固定合同必须与晋级环境精确一致。
-- Champion必须记录适配器ID和适配器产物哈希。
-- 正常新增行情或成员调整不会因为每日内容哈希变化而使Champion失效；Schema、
-  标准化逻辑、Universe生成规则或固定合同变化时不得激活。
-- Signal Runner不得接收调用者注入的策略对象；只能按Champion的`adapter_id`从
-  受控根目录定位适配器包。
+- `promotion_evidence` stores the promotion-time data Manifest, Dataset Snapshot,
+  and Universe Snapshot hashes, purely as immutable audit evidence.
+- `promotion_compatibility` binds the data family, record schema, normalization
+  version, Universe rule ID, and rule version that future runs must preserve.
+- `fixed_contract_set` binds cost, market rules, execution rules, portfolio risk,
+  strategy code, config, and lockfile hashes; these fixed contracts must match
+  the promotion environment exactly.
+- A Champion must record its adapter ID and adapter artifact hash.
+- Normal additions of bars or member changes do not invalidate a Champion just
+  because daily content hashes change; a Champion must not activate when schema,
+  normalization logic, Universe generation rules, or fixed contracts change.
+- Signal Runner must never accept a caller-injected strategy object; it locates
+  the adapter package only from the Champion's `adapter_id` under the controlled
+  root.
 
 ## Strategy Adapter 1.0
 
-- 包含适配器、策略和入口身份，以及代码、配置和规范化包摘要。
-- Signal Runner先验证Manifest、Champion绑定、代码字节和配置字节，再执行已验证
-  的代码字节；不按路径二次读取代码。
-- 适配器返回对象的策略ID、版本和协议必须再次校验。
-- 适配器包是正式策略的不可变载体。当前仓库只提交位于测试目录的纯合成参考包，
-  不存在可晋级的正式策略。
+- Contains adapter, strategy, and entry identity, plus code, config, and
+  normalized package summaries.
+- Signal Runner validates the Manifest, Champion binding, code bytes, and config
+  bytes first, then executes the already-verified code bytes; it never reads
+  code a second time by path.
+- The adapter-returned object's strategy ID, version, and protocol are validated
+  again.
+- An adapter package is the immutable carrier of a formal strategy. The current
+  repository commits only a purely synthetic reference package under the test
+  directory; no promotable formal strategy exists.
 
-## 版本规则
+## Version Rules
 
-- 含义、单位或必填字段改变：主版本升级。
-- 仅新增可选字段且旧消费者行为明确：次版本升级。
-- 已发布合同产物不可原地改写。
-- 消费者不支持合同版本时失败关闭。
-- JSON Schema是结构权威；金融计算只存在于`quant_core`。
+- Meaning, unit, or required-field changes: major version bump.
+- Only new optional fields with clear old-consumer behavior: minor version bump.
+- Published contract artifacts must never be rewritten in place.
+- A consumer without support for a contract version fails closed.
+- JSON Schema is the structural authority; financial calculation exists only in
+  `quant_core`.

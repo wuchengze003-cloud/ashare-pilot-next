@@ -1,8 +1,8 @@
-"""中期反转/超跌反弹策略迭代脚本（统一跑道 run_hold）。
+"""Mid-term reversal / oversold-rebound strategy iteration on the run_hold track.
 
-用法:
-    python tools/reversal_research.py --n 800          # 小样本快速迭代
-    python tools/reversal_research.py --n 0            # 全量
+Usage:
+    python apps/research/scripts/reversal_research.py --n 800   # small-sample iteration
+    python apps/research/scripts/reversal_research.py --n 0     # full universe
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "apps" / "research" / "src"))
 
 from types import SimpleNamespace  # noqa: E402
@@ -32,7 +32,7 @@ FULL = ROOT / "runtime" / "full-market"
 DAILY_BASIC = ROOT / "runtime" / "alt-data" / "daily_basic"
 CYQ = ROOT / "runtime" / "alt-data" / "cyq_perf"
 
-TREND = None  # 缓存 market_trend_filter
+TREND = None  # cached market_trend_filter
 
 
 def load_full(n: int = 800) -> pd.DataFrame:
@@ -103,14 +103,16 @@ def build_panel(n: int = 800) -> pd.DataFrame:
 def apply_quality(panel: pd.DataFrame, *, min_circ_mv: float = 3e5,
                   min_pb: float = 1.0, no_st: bool = True,
                   min_ret_1d: float = -0.05) -> pd.DataFrame:
-    """硬过滤：市值下限 / 剔除ST / 剔除破净(value trap) / 剔除当日飞刀。
+    """Hard quality filter: market-cap floor, drop ST, drop broken book value
+    (value trap), and drop same-day falling knives.
 
-    circ_mv 单位为万元(30亿=3e5)。min_ret_1d 避免接当日暴跌的飞刀。
+    circ_mv is in ten-thousand CNY (3bn CNY = 3e5). min_ret_1d avoids catching
+    a name that is crashing on the signal day.
     """
     out = panel.copy()
     out["is_st"] = out["name"].astype(str).str.upper().str.contains("ST", na=False)
     out = out[~out["is_st"]] if no_st else out
-    out = out[out["circ_mv"] >= min_circ_mv]  # 万元
+    out = out[out["circ_mv"] >= min_circ_mv]  # ten-thousand CNY
     out = out[out["pb"] >= min_pb]
     out = out[out["ret_1d"] >= min_ret_1d]
     return out
@@ -118,7 +120,7 @@ def apply_quality(panel: pd.DataFrame, *, min_circ_mv: float = 3e5,
 
 def manual_fit(prepared: pd.DataFrame, factors: list[str],
                weights: list[float]):
-    """确定性复合因子打分（非 ML），rank 稳定、换手低。"""
+    """Deterministic composite factor score (non-ML); stable ranks, low turnover."""
     score = sum(w * prepared[f"{f}_z"].to_numpy() for f, w in zip(factors, weights, strict=True))
     score = pd.Series(score, index=prepared.index)
     preds: dict[pd.Timestamp, np.ndarray] = {}
@@ -132,7 +134,7 @@ def run(panel: pd.DataFrame, factors: list[str], *, label_horizon: int = 15,
         buffer_days: int = 3, max_hold_days: int = 15, window: int = 60,
         refit_every: int = 10, model: str = "ridge", use_trend: bool = False,
         manual_weights: list[float] | None = None):
-    t0 = time.time()
+    t0 = time.perf_counter()
     prepared, feats = prepare_panel(panel, factors, label_horizon=label_horizon)
     if manual_weights is not None:
         fit = manual_fit(prepared, factors, manual_weights)
@@ -146,7 +148,7 @@ def run(panel: pd.DataFrame, factors: list[str], *, label_horizon: int = 15,
     res = run_hold(prepared, fit, cfg)
     print(f"  [run] label={label_horizon} hold={max_hold_days} topk={top_k} "
           f"buf={buffer_days} sl={stop_loss} trend={use_trend} "
-          f"manual={manual_weights} elapsed={time.time()-t0:.1f}s")
+          f"manual={manual_weights} elapsed={time.perf_counter()-t0:.1f}s")
     return res, fit, prepared
 
 
@@ -173,19 +175,19 @@ def seg_metrics(res, prepared=None):
 def describe_all(res, prepared=None, label=""):
     d = res.describe()
     print(f"=== {label} ===")
-    print(f"  全期: {d}")
+    print(f"  full: {d}")
     sm = seg_metrics(res, prepared)
     for name, v in sm.items():
         if v is None:
-            print(f"  {name:6s}: 无数据")
+            print(f"  {name:6s}: no data")
         else:
-            print(f"  {name:6s}: 年化 {v[0]:7.2%} 夏普 {v[1]:5.2f} 回撤 {v[2]:7.2%}")
+            print(f"  {name:6s}: annual {v[0]:7.2%} sharpe {v[1]:5.2f} maxdd {v[2]:7.2%}")
     return sm
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--n", type=int, default=800, help="样本数, 0=全量")
+    ap.add_argument("--n", type=int, default=800, help="sample size, 0 = full universe")
     ap.add_argument("--min-circ-mv", type=float, default=3e5)
     ap.add_argument("--min-pb", type=float, default=1.0)
     ap.add_argument("--label", type=int, default=15)
@@ -195,7 +197,7 @@ def main():
     ap.add_argument("--stop", type=float, default=0.25)
     ap.add_argument("--take", type=float, default=0.5)
     ap.add_argument("--trend", action="store_true")
-    ap.add_argument("--winner", action="store_true", help="加入 winner_rate 因子")
+    ap.add_argument("--winner", action="store_true", help="add the winner_rate factor")
     ap.add_argument("--ret1d-floor", type=float, default=-0.05)
     args = ap.parse_args()
 

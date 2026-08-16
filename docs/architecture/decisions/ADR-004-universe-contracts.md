@@ -1,19 +1,24 @@
-# ADR-004：Universe是策略绑定的点时合同
+# ADR-004: Universe Is a Strategy-Bound Point-in-Time Contract
 
-- 状态：已接受
-- 日期：2026-07-29
+- Status: accepted
+- Date: 2026-07-29
 
-## 决定
+## Decision
 
-系统不把某个指数写死为永久架构。每条策略必须绑定一个点时Universe合同，合同
-记录成员有效期、来源、版本、质量状态和`as_of`。
+The system does not hard-code any index as permanent architecture. Every
+strategy must bind a point-in-time Universe contract that records member
+validity, source, version, quality status, and `as_of`.
 
-首期通用参考范围为`csi800-pit/v1`。未来新增`csi300-pit/v1`、
-`csi1000-pit/v1`或主题Universe时，必须提供完整历史成员和独立验证。
+The initial general reference scope is `csi800-pit/v1`. Future additions such as
+`csi300-pit/v1`, `csi1000-pit/v1`, or thematic Universes must provide complete
+historical membership and independent verification.
 
-今天的静态观察名单不能倒灌历史，也不能独立授予生产交易资格。
+Today's static watch list cannot backfill history and cannot independently grant
+production trading eligibility.
 
-## 最终资格
+## Final Eligibility
 
-Universe成员仍需通过数据完整、上市时长、ST、停牌、涨跌停、流动性和策略自身
-约束。基础成员和最终资格必须分别记录原因，不能静默跳过。
+Universe members must still pass data completeness, listing age, ST, suspension,
+limit-up/down, liquidity, and strategy-specific constraints. Base membership and
+final eligibility must be recorded separately with reasons; nothing may be
+silently skipped.

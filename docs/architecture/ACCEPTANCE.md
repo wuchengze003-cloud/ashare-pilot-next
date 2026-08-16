@@ -1,71 +1,96 @@
-# 首期架构验收
+# Foundation Architecture Acceptance
 
-## 本次骨架
+## Current Skeleton
 
-- 仓库不含Legacy代码、历史报告、运行数据或本机绝对路径。
-- 所有Schema有效，所有黄金样例通过对应Schema。
-- Python包依赖方向通过机器检查。
-- 状态机并发故障案例有测试。
-- CI在push和pull request运行边界、合同、测试和敏感信息检查。
+- The repository contains no Legacy code, historical reports, runtime data, or
+  machine-specific absolute paths.
+- All schemas are valid and all golden examples pass their schemas.
+- Python package dependency direction passes machine checks.
+- State-machine concurrent-failure cases have tests.
+- CI runs boundary, contract, test, and secret checks on push and pull request.
 
-## 最小纵向链路
+## Minimum Vertical Slice
 
-后续里程碑必须用固定合成数据完成：
+Later milestones must complete this slice with fixed synthetic data:
 
 ```text
 Dataset Manifest
 -> PIT Universe
--> 测试专用参考策略
--> quant_core组合语义
--> Signal Runner目标仓位
+-> test-only reference strategy
+-> quant_core portfolio semantics
+-> Signal Runner target positions
 -> Production Signal
 -> Runtime Manifest
--> Web只读渲染
+-> read-only Web rendering
 ```
 
-验收必须包含：
+Acceptance must include:
 
-- 相同输入与哈希产生字节一致的目标结果。
-- 在`as_of`之后追加数据不改变历史结果。
-- 成本黄金样例和市场规则边界通过。
-- 成本计算覆盖印花税变更日前后、最低佣金、逐项取整和高换手累计成本；
-  日期段缺失、重叠或市场未支持时必须失败关闭。
-- `ACTIVE/HOLD/REDUCE_ONLY/FLAT`组合测试通过。
-- Web删除后，Research和Signal Runner测试仍通过。
-- Legacy目录不存在时全部验证仍通过。
+- Identical inputs and hashes produce byte-identical target results.
+- Appending data after `as_of` never changes historical results.
+- Cost golden examples and market-rule boundaries pass.
+- Cost calculation covers both sides of the stamp-duty change date, minimum
+  commission, per-item rounding, and cumulative costs at high turnover; missing
+  or overlapping date segments and unsupported markets must fail closed.
+- `ACTIVE/HOLD/REDUCE_ONLY/FLAT` combination tests pass.
+- After deleting Web, Research and Signal Runner tests still pass.
+- All validation still passes when no Legacy directory exists.
 
-参考策略只验证系统，不参与正式赛马，也不得被展示成盈利策略。
+The reference strategy validates the system only. It does not enter formal races
+and must not be presented as a profitable strategy.
 
-## 当前验证进度
+## Current Verification Progress
 
-已用纯合成JSON数据完成到`Runtime Manifest`的闭环，并覆盖：
+The loop through `Runtime Manifest` has been completed with purely synthetic JSON
+data, covering:
 
-- 同输入字节确定性。
-- 数据文件哈希和JSON行数核验。
-- Champion 3.0区分固定合同、兼容规则和每日点时证据。
-- Champion适配器ID、适配器声明哈希和锁文件声明哈希错配阻断。
-- 生产入口不接受任意策略对象、Git SHA或锁文件摘要声明。
-- Signal Runner从Champion指定路径加载内容寻址适配器，并从本机计算Git和锁文件
-  身份；代码篡改在执行前被阻断。
-- 单一生产入口根据验证结果生成`ACTIVE/HOLD/REDUCE_ONLY/FLAT`。
-- 合同漂移、锁文件漂移和数据过期在有可信前序信号时保持上一目标。
-- 无可信前序信号时拒绝伪造降级仓位；从未激活Champion时明确空仓。
-- 点时Universe外目标阻断。
-- 单股、持仓数和总仓位约束。
-- Dataset和Universe由同一次验证过的字节/合同构造不可变点时快照。
-- 策略只接收快照，不接收路径、文件句柄或独立行情副本。
-- 未来行和文件行序变化不改变历史Snapshot哈希或参考目标。
-- 正常每日Manifest变化不会被误判为Champion合同漂移。
-- Production Signal、Signal Head和Runtime Manifest以不可变字节构建。
-- 运行目录完整落盘并带`COMMITTED`标记后，当前链头才原子切换。
-- 旧链头分叉、未来信号倒灌、未提交目录和产物交叉哈希错误均被阻断。
-- 运行目录重命名前后及链头切换后的故障可通过同一产物幂等恢复。
-- Research从不可变快照生成字节确定的点时特征面板，未来行不能改写历史面板。
-- Data Gateway逐成员日审计历史Universe，停牌、退市、零观测和成员数异常有明确语义。
-- 数据新鲜度按显式交易日历判断；当前生产信号必须匹配消费者要求的交易日。
+- Byte determinism for identical inputs.
+- Data-file hash and JSON line-count verification.
+- Champion 3.0 separation of fixed contracts, compatibility rules, and daily
+  point-in-time evidence.
+- Blocking mismatches in Champion adapter ID, declared adapter hash, and declared
+  lockfile hash.
+- Production entry rejecting injected strategy objects, declared Git SHAs, and
+  declared lockfile digests.
+- Signal Runner loading the content-addressed adapter from the Champion-specified
+  path and computing Git and lockfile identity locally; code tampering is blocked
+  before execution.
+- One production entry producing `ACTIVE/HOLD/REDUCE_ONLY/FLAT` from validation
+  results.
+- Contract drift, lockfile drift, and stale data keep the previous target when a
+  trusted previous signal exists.
+- Without a trusted previous signal, forged degraded positions are rejected; a
+  never-activated Champion means an explicit flat book.
+- Targets outside the point-in-time Universe are blocked.
+- Single-name, position-count, and gross-exposure constraints.
+- Dataset and Universe immutable point-in-time snapshots are constructed from the
+  same validated bytes/contracts.
+- Strategies receive only snapshots, not paths, file handles, or separate market
+  data copies.
+- Future rows and file line-order changes do not alter historical Snapshot hashes
+  or reference targets.
+- Normal daily Manifest changes are not misclassified as Champion contract drift.
+- Production Signal, Signal Head, and Runtime Manifest are built as immutable
+  bytes.
+- The current head is atomically switched only after the run directory is fully
+  persisted with a `COMMITTED` marker.
+- Old-head forks, future-signal replay, uncommitted directories, and
+  cross-artifact hash errors are all blocked.
+- Failures before/after run-directory rename and after head switch recover
+  idempotently from the same artifacts.
+- Research builds a byte-deterministic point-in-time feature panel from immutable
+  snapshots; future rows cannot rewrite the historical panel.
+- Data Gateway audits the historical Universe member-day by member-day;
+  suspension, delisting, zero observation, and member-count anomalies have
+  explicit semantics.
+- Data freshness is evaluated against an explicit trading calendar; the current
+  production signal must match the trading day the consumer requires.
 
-Web只读渲染仍是后续里程碑；在此之前本仓库继续标记为“不用于真实交易”。
+Read-only Web rendering is still a later milestone; until then this repository
+remains labeled "not for real trading".
 
-当前适配器已完成内容寻址和受控加载，但快照闭环仍使用纯合成JSON数据，不等同于
-真实供应商数据回放。正式适配器尚未进入仓库；获批适配器本身属于受信任代码，
-本Gate不承诺对已获批恶意代码实施操作系统级文件或网络沙箱。
+The current adapter has content addressing and controlled loading, but the
+snapshot loop still uses purely synthetic JSON data and is not equivalent to real
+vendor-data replay. No formal adapter has entered the repository yet; an approved
+adapter is trusted code, and this gate does not promise an OS-level file or
+network sandbox against a malicious approved adapter.
