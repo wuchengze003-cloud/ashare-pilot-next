@@ -123,13 +123,17 @@ tools/update.py                              -> orchestrator (intraday / full / 
   branch/PR to web GPT/Claude for review.
 - Ensure `runtime/` and `.env` are git-ignored before committing.
 
-### 6.2 Aliyun (front-end)
-- The dashboard is **pure static HTML** (`runtime/dashboard/`). Deploy by
-  copying `index.html`, `detail/*.html`, `model/*.html`, and `acceptance.html`
-  to the Aliyun server (`root@47.77.231.22`, found in this machine's A-share
-  assistant project). No server-side runtime is needed; the server has 2 vCPU,
+### 6.2 Aliyun (front-end) - deployed
+- The dashboard is **pure static HTML** (`runtime/dashboard/`). It is deployed
+  to the Aliyun ECS host found in this machine's A-share assistant project
+  (host stored locally as `DEPLOY_HOST=root@<aliyun-host>`; do not commit the
+  real address). No server-side runtime is needed; the server has 2 vCPU,
   1.6 GiB RAM, and ~24 GiB free disk, which is ample for static hosting.
-- Target URL: `http://47.77.231.22/ashare-pilot-next/`.
+- Deployment: files are uploaded to `/var/www/ashare-pilot-next/` and served by
+  Nginx at `/ashare-pilot-next/` via
+  `/etc/nginx/snippets/ashare-pilot-next.conf`.
+- Self-check passed: index, acceptance, model, and detail pages return HTTP
+  200; existing `/` and `/a-share` routes still return HTTP 200 after reload.
 
 ## 7. Key conventions (do not break)
 
