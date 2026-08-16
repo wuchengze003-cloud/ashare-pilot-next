@@ -160,3 +160,29 @@ tools/update.py                              -> orchestrator (intraday / full / 
 | `tools/collect_alt_data.py` | bulk alt-data collector |
 | `docs/UPDATE_RUNBOOK.md` | how to refresh the dashboard |
 | `.workbuddy/memory/2026-08-16.md` | full 16-round work log |
+
+## 9. Ready-to-use /goal condition
+
+Paste this after `/goal` to have the AI keep working across turns until the
+handoff cleanup is complete (self-verifying, per the /goal evaluator contract):
+
+```text
+Finish the ashare-pilot-next handoff cleanup:
+
+1. `uv run pytest` exits 0 and `uv run ruff check .` reports no errors.
+2. README.md is rewritten in English and describes the real system (rolling
+   GBDT champion + static dashboard); no "架构骨架" or "不用于真实交易" remains.
+3. README.md and every docs/architecture/*.md contain zero Chinese characters;
+   code comments in apps/ tools/ packages/ services/ are English — Chinese is
+   allowed only in render_dashboard.py's user-facing UI strings.
+4. Dead code removed: no /tmp/*.py scripts are committed, and
+   runtime/dashboard/sentiment_demo.html is deleted.
+5. Front-end audit: render_dashboard.py user-facing text no longer contains
+   internal terms (frank-quant, label60, permutation importance, DSR, MC), and
+   verbose <div class="sub"> helper sentences are trimmed while keeping all
+   numbers and tables intact.
+6. `git status` on feat/dashboard-handoff is clean (all work committed).
+
+Inviolable: do not change champion.py strategy logic or the hybrid label
+config; do not touch the main branch. Stop after 30 turns if not complete.
+```
