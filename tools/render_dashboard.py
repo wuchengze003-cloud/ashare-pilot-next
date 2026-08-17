@@ -1209,7 +1209,7 @@ def _profile_section(card: dict, extended: dict | None = None) -> str:
                 f'<div class="news-item">{n["title"]}<div class="news-meta">{n["time"]} · {n["source"]}</div></div>'
                 for n in news
             )
-            ext_blocks += f'<div class="pf-group">新闻研报（东方财富妙想）</div>{news_rows}'
+            ext_blocks += f'<div class="pf-group">新闻资讯（东方财富）</div>{news_rows}'
 
     return f"""
 <div class="chart">
