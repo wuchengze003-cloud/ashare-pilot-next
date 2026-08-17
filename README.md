@@ -30,12 +30,14 @@ tools/fetch_market_data.py   -> runtime/ raw daily bars and metadata
 tools/collect_alt_data.py    -> runtime/alt-data/* (moneyflow, margin, chips, ...)
 apps/research/champion.py    -> runtime/dashboard/champion.json (train + backtest)
 apps/research/stock_profile.py -> runtime/stock-profiles/*.json (research cards)
+tools/fetch_stock_news.py    -> keyless Eastmoney news into *_extended.json
 tools/render_dashboard.py    -> runtime/dashboard/*.html (static render)
 tools/update.py              -> orchestrates intraday / full / render refreshes
 ```
 
-The pilot market-data source is a Tushare-compatible HTTP endpoint; connector
-data (concepts, consensus, chips, ratings, news) is collected through the
+The pilot market-data source is a Tushare-compatible HTTP endpoint. News is
+fetched directly from the keyless Eastmoney search API; concepts, consensus,
+chips, and ratings are cached connector snapshots collected through the
 configured MCP connectors. Historical research reads immutable, hashed datasets
 by `dataset_id`; it never depends on mutable HTTP responses or SQLite tables.
 

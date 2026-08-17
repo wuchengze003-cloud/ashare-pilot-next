@@ -66,20 +66,28 @@ uv run python tools/update.py render
 | `tools/collect_alt_data.py` | Bulk alt-data collector (breakpoint-resume). `ALT_END_DATE` env var overrides the end date |
 | `apps/research/src/ashare_research_app/champion.py` | `python -m ashare_research_app.champion` — retrain + backtest + emit `champion.json` |
 | `apps/research/src/ashare_research_app/stock_profile.py` | `python -m ashare_research_app.stock_profile .` — per-stock research cards |
+| `tools/fetch_stock_news.py` | Keyless Eastmoney news search; fills the `news` field in each `*_extended.json` |
 | `tools/render_dashboard.py` | Renders `index.html` + `acceptance.html` + model pages + detail pages |
 
 ## 5. Connector snapshots (concepts / consensus / chip / news / rating)
 
-The per-stock research card also shows live-connector data (通达信 concepts,
-腾讯自选股 consensus/chip/rating, 东方财富妙想 news). These are MCP tools, not
-scripts, so they are collected in-session by an agent and landed to
-`runtime/stock-profiles/{code}_extended.json`. Key facts:
+The per-stock research card combines two kinds of extra data:
+
+1. **Keyless script (news)** — `tools/fetch_stock_news.py` calls the public
+   Eastmoney search endpoint directly. No MCP, no WorkBuddy credits, no API
+   key. `tools/update.py full` runs it automatically after the research cards.
+2. **MCP connector snapshots (concepts / consensus / chip / rating)** — these
+   still come from 通达信 tdx and 腾讯自选股 westock and are collected
+   in-session by an agent into `runtime/stock-profiles/{code}_extended.json`.
+
+Connector snapshot facts:
 
 - `tdx_api_data` concept boards: keep only rows with `配置分类 == 2` (real
   concepts); drop `配置分类 == 4` (dynamic tags like 大盘股/业绩预升/通达信热股).
 - `data_chip` accepts comma-separated `codes` for bulk fetch.
 - `data_consensus` returns empty for small caps without analyst coverage.
-- `mx_finance_search_news` requires the 东方财富妙想 connector to be connected.
+- The old `mx_finance_search_news` dependency is removed; news now uses
+  `tools/fetch_stock_news.py`.
 
 ## 6. Gotchas / boundaries
 

@@ -108,8 +108,9 @@ tools/update.py                              -> orchestrator (intraday / full / 
   covers all of it (AGENTS.md rule 9: runtime is never tracked).
 
 ### 5.5 Unfinished items (explicit)
-- **News/research expansion to 18 holdings** — blocked: 东方财富妙想 MCP
-  (mx-ds-mcp) is currently **disconnected**; needs the user to reconnect.
+- **News/research expansion to 18 holdings** — done without MCP: the keyless
+  Eastmoney search API is implemented in `tools/fetch_stock_news.py` and the
+  news block is filled for all 18 connector snapshots.
 - **Rating** was just completed (14/17 have data).
 - Task list still shows stale pending items (#7 Stage C, #22 alt-factor
   causality gate, #40 rewrite backtest engine, #46 research/sim split, #59

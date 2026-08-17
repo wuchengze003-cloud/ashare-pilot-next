@@ -97,7 +97,10 @@ def full() -> None:
     # 3. regenerate per-stock research cards
     _run([sys.executable, "-m", "ashare_research_app.stock_profile", str(ROOT)])
 
-    # 4. render all static pages
+    # 4. refresh keyless news snapshots (no MCP/WorkBuddy dependency)
+    _run([sys.executable, str(ROOT / "tools/fetch_stock_news.py")])
+
+    # 5. render all static pages
     render()
 
 
