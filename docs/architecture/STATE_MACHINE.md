@@ -1,39 +1,44 @@
-# 生产状态机
+# Production State Machine
 
-## 状态
+## States
 
-| 状态 | 含义 | 目标仓位行为 |
+| State | Meaning | Target-position behavior |
 |---|---|---|
-| `ACTIVE` | Champion、合同、决策数据和运行环境有效 | 发布正常目标 |
-| `HOLD` | 无法可靠确认决策或执行能力 | 引用上一信号，并逐项复制上一有效目标，不得改变 |
-| `REDUCE_ONLY` | 禁止扩大风险，但有效数据允许降低目标 | 引用上一信号；不得新增证券，任一证券目标不得提高 |
-| `FLAT` | 明确目标为零且具备发布依据 | 所有目标权重为零 |
+| `ACTIVE` | Champion, contracts, decision data, and execution environment are valid | Publish normal targets |
+| `HOLD` | Decision or execution capability cannot be confirmed reliably | Reference the previous signal and copy the previous valid target item by item, unchanged |
+| `REDUCE_ONLY` | Increasing risk is forbidden, but valid data permits lowering targets | Reference the previous signal; do not add securities and do not raise any security's target |
+| `FLAT` | The explicit target is zero and there is a basis for publishing it | All target weights are zero |
 
-## 确定性优先级
+## Deterministic Priority
 
-从上到下匹配第一条：
+The first match wins, top to bottom:
 
-1. 执行价格、交易状态或上一有效目标不可确认：`HOLD`。
-2. 独立清仓规则触发且必要数据有效：`FLAT`。
-3. 当前Champion撤销、独立减仓规则触发或只允许降险：`REDUCE_ONLY`。
-4. 决策数据、合同、哈希或Champion健康检查失败：`HOLD`。
-5. 从未存在合格Champion且系统没有生产目标：`FLAT`。
-6. 所有检查通过：`ACTIVE`。
+1. Execution price, trading status, or the previous valid target cannot be
+   confirmed: `HOLD`.
+2. An independent liquidation rule fires and the required data is valid: `FLAT`.
+3. The current Champion is revoked, an independent risk-reduction rule fires, or
+   only risk reduction is allowed: `REDUCE_ONLY`.
+4. Decision data, contracts, hashes, or Champion health checks fail: `HOLD`.
+5. A qualified Champion has never existed and the system has no production
+   target: `FLAT`.
+6. All checks pass: `ACTIVE`.
 
-数据异常本身不能授权盲目清仓。恢复到`ACTIVE`必须重新验证全部输入，不能只清除
-错误标记。
+Data anomalies by themselves do not authorize a blind liquidation. Returning to
+`ACTIVE` requires re-validating every input, not merely clearing an error flag.
 
-`HOLD`和`REDUCE_ONLY`发布前必须加载当前已提交`Signal Head`及其指向的完整信号。
-链头、信号哈希、时间和序号必须交叉一致。仅提供一个哈希、任意历史信号或未提交
-运行目录时，不能证明状态语义，应失败关闭。
+Before publishing `HOLD` or `REDUCE_ONLY`, the system must load the currently
+committed `Signal Head` and the complete signal it points to. The head, signal
+hash, time, and sequence must cross-check. A lone hash, an arbitrary historical
+signal, or an uncommitted run directory cannot prove state semantics and must
+fail closed.
 
-## 并发故障示例
+## Concurrent-Failure Examples
 
-| Champion | 决策数据 | 执行数据 | 风险规则 | 结果 |
+| Champion | Decision data | Execution data | Risk rule | Result |
 |---|---|---|---|---|
-| 撤销 | 新鲜 | 不可确认 | 减仓 | `HOLD` |
-| 撤销 | 新鲜 | 有效 | 减仓 | `REDUCE_ONLY` |
-| 健康 | 过期 | 有效 | 无 | `HOLD` |
-| 健康 | 过期 | 有效 | 独立清仓 | `FLAT` |
-| 缺失且从未激活 | 新鲜 | 有效 | 无 | `FLAT` |
-| 健康 | 新鲜 | 有效 | 无 | `ACTIVE` |
+| Revoked | Fresh | Unconfirmable | Reduce | `HOLD` |
+| Revoked | Fresh | Valid | Reduce | `REDUCE_ONLY` |
+| Healthy | Stale | Valid | None | `HOLD` |
+| Healthy | Stale | Valid | Independent liquidation | `FLAT` |
+| Missing and never activated | Fresh | Valid | None | `FLAT` |
+| Healthy | Fresh | Valid | None | `ACTIVE` |

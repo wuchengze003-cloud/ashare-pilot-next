@@ -1,13 +1,15 @@
-# 实证能力重建记录
+# Evidence Reimplementation Record
 
-本记录只保留需求来源和新仓库验证位置，不复制旧实现、旧报告、旧运行产物或旧审计
-数字。
+This record keeps only the requirement source and the verification location in
+the new repository. It does not copy legacy implementations, legacy reports,
+legacy runtime artifacts, or legacy audit numbers.
 
-| 能力 | 需求来源提交 | 当前实现 | 当前反向验证 |
+| Capability | Requirement source commit | Current implementation | Current counter-verification |
 |---|---|---|---|
-| 点时特征重放 | `6536b56` | `apps/research`从不可变`DatasetSnapshot`生成确定性特征面板 | 输入追加未来行不改变历史面板；快照若泄漏未来行立即失败 |
-| 历史成员覆盖 | `535177d` | `services/data_gateway`逐交易日核对成员、上市/退市区间、行情和停牌证明 | 缺失成员日、零观测成员和成员数异常均失败 |
-| 过期产物关闭 | `5421ec4` | Data Gateway按交易日历评估数据新鲜度；Signal Runner按要求交易日读取当前链头 | 过期数据生成失败健康状态；旧信号不能作为新交易日当前信号读取 |
+| Point-in-time feature replay | `6536b56` | `apps/research` builds a deterministic feature panel from an immutable `DatasetSnapshot` | Appending future rows never changes the historical panel; a snapshot leaking future rows fails immediately |
+| Historical member coverage | `535177d` | `services/data_gateway` checks members per trading day against listing/delisting ranges, bars, and suspension evidence | Missing member days, zero-observation members, and member-count anomalies all fail |
+| Stale-artifact closure | `5421ec4` | Data Gateway evaluates freshness against an explicit trading calendar; Signal Runner reads the current head for the requested trading day | Stale data produces a failed health state; an old signal cannot be read as the current signal for a new trading day |
 
-这些能力使用纯合成输入独立重建。当前结果证明门禁行为和模块边界，不证明真实供应商
-覆盖率、策略有效性或可交易收益。
+These capabilities were rebuilt independently with purely synthetic inputs. The
+results prove gate behavior and module boundaries; they do not prove real vendor
+coverage, strategy effectiveness, or tradable returns.

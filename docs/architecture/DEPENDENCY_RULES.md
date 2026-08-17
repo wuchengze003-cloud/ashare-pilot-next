@@ -1,25 +1,26 @@
-# 依赖方向
+# Dependency Direction
 
-## 允许
+## Allowed
 
 ```text
 apps/research       -> packages/quant_core
 apps/signal_runner  -> packages/quant_core
-apps/web            -> contracts生成类型或只读HTTP
+apps/web            -> generated contract types or read-only HTTP
 services/data_gateway -> contracts
-ops                 -> 各应用公开命令
+ops                 -> each application's public commands
 ```
 
-## 禁止
+## Forbidden
 
 ```text
-quant_core -> apps、services、ops、Web
+quant_core -> apps, services, ops, Web
 signal_runner -> research
-research -> signal_runner、Web
-data_gateway -> strategy、portfolio、promotion
-Web -> quant_core Python实现、Research内部目录、数据缓存表
-任何模块 -> Legacy仓库
+research -> signal_runner, Web
+data_gateway -> strategy, portfolio, promotion
+Web -> quant_core Python implementation, Research internals, data cache tables
+any module -> the Legacy repository
 ```
 
-跨模块通信必须通过版本化合同或公开包接口。CI使用AST和路径检查验证Python依赖，
-而不是只依靠本文件。
+Cross-module communication must go through versioned contracts or public package
+interfaces. CI verifies Python dependencies with AST and path checks rather than
+trusting this document alone.

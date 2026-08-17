@@ -559,7 +559,8 @@ class TushareClient:
         """Fetch unadjusted daily bars for one symbol and date range.
 
         Primary key: (ts_code, trade_date).
-        Units: prices in CNY (unadjusted), vol in 手, amount in 千元.
+        Units: prices in CNY (unadjusted), vol in lots (1 lot = 100 shares),
+        amount in thousands of CNY.
         """
         validate_symbol(ts_code, context="daily")
         if end_date < start_date:

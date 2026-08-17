@@ -316,6 +316,29 @@ def test_runner_rejects_previous_signal_hash_mismatch() -> None:
         )
 
 
+def test_runner_rejects_signal_sequence_gap() -> None:
+    previous = active_signal()
+    with pytest.raises(ValueError, match="signal sequence must immediately follow"):
+        build_production_signal(
+            SignalInputs(
+                signal_id="fixture-seq3",
+                as_of=date(2026, 7, 30),
+                latest_complete_date=date(2026, 7, 30),
+                generated_at=datetime(2026, 7, 30, 8, tzinfo=UTC),
+                health=health(),
+                contract_set=contract_set(champion=True),
+                target_positions=(TargetPosition("600000.SH", 0.3),),
+                reason_codes=("CHAMPION_ACTIVE",),
+                champion=champion(),
+                sequence=3,
+                previous_head_sha256="5" * 64,
+                previous_signal_sha256=canonical_json_sha256(previous),
+                previous_signal=previous,
+            ),
+            schema=SCHEMA,
+        )
+
+
 def test_runner_validates_output_against_schema() -> None:
     invalid_schema = dict(SCHEMA)
     invalid_schema["required"] = [*SCHEMA["required"], "missing_by_design"]

@@ -26,7 +26,8 @@ def _read_json(path: Path) -> bytes | None:
     return content
 
 
-def make_handler(static_dir: Path, state_file: Path, market_file: Path, error_file: Path):
+def make_handler(static_dir: Path, state_file: Path, market_file: Path, error_file: Path,
+                 cycle_file: Path):
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code: int, content: bytes, content_type: str) -> None:
             self.send_response(code)
@@ -54,6 +55,13 @@ def make_handler(static_dir: Path, state_file: Path, market_file: Path, error_fi
                     content if content is not None else b"{}",
                     "application/json",
                 )
+            elif route == "/api/cycle-status":
+                content = _read_json(cycle_file)
+                self._send(
+                    200,
+                    content if content is not None else b"{}",
+                    "application/json",
+                )
             elif route == "/api/refresh-error":
                 content = _read_json(error_file)
                 self._send(
@@ -71,8 +79,8 @@ def make_handler(static_dir: Path, state_file: Path, market_file: Path, error_fi
 
 
 def serve(*, static_dir: Path, state_file: Path, market_file: Path, error_file: Path,
-          host: str, port: int) -> None:
-    handler = make_handler(static_dir, state_file, market_file, error_file)
+          cycle_file: Path, host: str, port: int) -> None:
+    handler = make_handler(static_dir, state_file, market_file, error_file, cycle_file)
     server = ThreadingHTTPServer((host, port), handler)
     actual_port = server.server_address[1]
     print(f"pilot web listening on http://{host}:{actual_port}")
@@ -86,6 +94,7 @@ def main() -> int:
     parser.add_argument("--state-file", required=True)
     parser.add_argument("--market-file", required=True)
     parser.add_argument("--error-file", required=True)
+    parser.add_argument("--cycle-status-file", required=True)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
@@ -94,6 +103,7 @@ def main() -> int:
         state_file=Path(args.state_file),
         market_file=Path(args.market_file),
         error_file=Path(args.error_file),
+        cycle_file=Path(args.cycle_status_file),
         host=args.host,
         port=args.port,
     )
