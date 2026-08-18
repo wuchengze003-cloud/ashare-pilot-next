@@ -48,28 +48,6 @@ def test_tools_ui_strings_are_allowed(tmp_path: Path) -> None:
     assert check_language(tmp_path) == []
 
 
-def test_champion_display_labels_are_allowed(tmp_path: Path) -> None:
-    write(tmp_path, "README.md", "# Project\n")
-    write(
-        tmp_path,
-        "apps/research/champion.py",
-        'FEATURE_LABELS = {"ret_1d": "1日涨幅"}\nVALUE = 1\n',
-    )
-
-    assert check_language(tmp_path) == []
-
-
-def test_champion_non_allowlisted_cjk_string_is_rejected(tmp_path: Path) -> None:
-    write(tmp_path, "README.md", "# Project\n")
-    write(
-        tmp_path,
-        "apps/research/champion.py",
-        'reason_labels = {"stop": "止损"}\n',
-    )
-
-    violations = check_language(tmp_path)
-    assert any("CJK in string literal" in item for item in violations)
-
 def test_test_fixture_data_is_allowed(tmp_path: Path) -> None:
     write(tmp_path, "README.md", "# Project\n")
     write(tmp_path, "services/data_gateway/tests/test_data.py", 'NAME = "平安银行"\n')

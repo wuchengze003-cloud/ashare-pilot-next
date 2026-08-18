@@ -88,3 +88,17 @@ def test_duplicate_factor_raises() -> None:
     with pytest.raises(NormalizationError) as exc:
         forward_adjust(bars, factors)
     assert exc.value.reason_code == "DUPLICATE_ADJ_FACTOR"
+
+
+def test_future_factor_cannot_rebase_a_historical_snapshot() -> None:
+    d1, d2 = date(2023, 1, 2), date(2023, 1, 3)
+    bars = [_bar("600000.SH", d1, 10.0)]
+    factors = [_factor("600000.SH", d1, 1.0), _factor("600000.SH", d2, 2.0)]
+    with pytest.raises(NormalizationError) as exc:
+        forward_adjust(bars, factors)
+    assert exc.value.reason_code == "FUTURE_ADJ_FACTOR"
+
+
+def test_nan_adjustment_factor_is_rejected() -> None:
+    with pytest.raises(ValueError, match="must be positive"):
+        _factor("600000.SH", date(2023, 1, 2), float("nan"))

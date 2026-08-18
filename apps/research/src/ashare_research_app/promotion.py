@@ -39,6 +39,7 @@ STRATEGY_ID = "ml-baseline"
 STRATEGY_VERSION = "v1"
 UNIVERSE_POLICY_ID = "pilot-audit-universe"
 UNIVERSE_POLICY_VERSION = "v1"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 PILOT_MARKET_RULES: dict[str, Any] = {
     "contract_id": "market-rules",
     "schema_version": "1.0.0",
@@ -111,17 +112,19 @@ class BaselineMLStrategy:
     strategy_id = "{strategy_id}"
     strategy_version = "{strategy_version}"
 
-    def __init__(self, *, bundle, top_k: int, per_weight: float) -> None:
+    def __init__(self, *, bundle, top_k: int, per_weight: float, rebalance_interval: int) -> None:
         self._models = bundle["models"]
         self._horizons = tuple(bundle["horizons"])
+        self._orientation = int(bundle["orientation"])
         self._top_k = top_k
         self._per_weight = per_weight
+        self._rebalance_interval = rebalance_interval
 
     def _score(self, matrix):
         predictions = np.column_stack(
             [self._models[horizon].predict(matrix) for horizon in self._horizons]
         )
-        return predictions.mean(axis=1)
+        return predictions.mean(axis=1) * self._orientation
 
     def target_positions(
         self,
@@ -130,15 +133,23 @@ class BaselineMLStrategy:
         dataset_snapshot: DatasetSnapshot,
         universe_snapshot: UniverseSnapshot,
     ) -> tuple[TargetPosition, ...]:
+        visible_bars = tuple(dataset_snapshot.bars(through=as_of))
+        trade_dates = sorted({{bar.trade_date for bar in visible_bars}})
+        if not trade_dates:
+            return ()
+        anchor_index = len(trade_dates) - 1
+        anchor_index -= anchor_index % self._rebalance_interval
+        rebalance_date = trade_dates[anchor_index]
         history: dict[str, list[DailyBar]] = defaultdict(list)
-        for bar in dataset_snapshot.bars(through=as_of):
+        for bar in visible_bars:
             if bar.symbol in universe_snapshot.eligible_symbols:
                 history[bar.symbol].append(bar)
 
         candidates: list[tuple[str, tuple[float, ...]]] = []
         for symbol in sorted(history):
             ordered = sorted(history[symbol], key=lambda item: item.trade_date)
-            if ordered[-1].trade_date != as_of:
+            ordered = [bar for bar in ordered if bar.trade_date <= rebalance_date]
+            if not ordered or ordered[-1].trade_date != rebalance_date:
                 continue
             values = compute_feature_row(ordered, len(ordered) - 1)
             if values is None:
@@ -176,6 +187,7 @@ def build_strategy(config: Mapping[str, object]) -> BaselineMLStrategy:
         bundle=bundle,
         top_k=int(config["top_k"]),
         per_weight=float(config["per_weight"]),
+        rebalance_interval=int(config["rebalance_interval"]),
     )
 '''
 
@@ -262,7 +274,7 @@ def _generate_adapter_source(feature_names: tuple[str, ...]) -> str:
     )
 
 
-def _evaluate_promotion_gate(
+def evaluate_promotion_gate(
     report: BacktestReport,
     gate: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -312,6 +324,8 @@ def _evaluate_promotion_gate(
         failures.append("MINIMUM_TRADES_NOT_MET")
     if sharpe < float(gate["minimum_sharpe"]):
         failures.append("MINIMUM_SHARPE_NOT_MET")
+    if report.validation_ic_mean < float(gate["minimum_validation_ic"]):
+        failures.append("MINIMUM_VALIDATION_IC_NOT_MET")
     if top_profit_share > float(gate["maximum_top_trade_profit_share"]):
         failures.append("TOP_TRADE_PROFIT_CONCENTRATION_EXCEEDED")
     if (
@@ -327,6 +341,7 @@ def _evaluate_promotion_gate(
             "maximum_drawdown": float(report.metrics["max_drawdown"]),
             "executed_trades": executed_trades,
             "sharpe": round(sharpe, 6),
+            "validation_ic_mean": round(report.validation_ic_mean, 6),
             "top_trade_profit_share": round(top_profit_share, 6),
         },
     }
@@ -355,12 +370,14 @@ def promote_baseline_model(
     report: BacktestReport,
     dataset_manifest: Mapping[str, Any],
     snapshot_symbols: tuple[str, ...],
+    universe_document: Mapping[str, Any],
     as_of: str,
     generated_at: datetime,
     top_k: int,
     per_weight: float,
     feature_names: tuple[str, ...],
     promotion_gate: Mapping[str, Any],
+    rebalance_interval: int = 5,
 ) -> PromotionPaths:
     """Create one immutable Champion Package; idempotent for identical content."""
     repository_root = Path(repository_root)
@@ -378,7 +395,24 @@ def promote_baseline_model(
         raise ChampionPackageError("dataset manifest does not match the backtest report")
     if str(dataset_manifest.get("as_of")) != as_of or report.test_end.isoformat() != as_of:
         raise ChampionPackageError("promotion as_of does not match research evidence")
-    gate_evaluation = _evaluate_promotion_gate(report, promotion_gate)
+    if top_k != report.top_k or not math.isclose(per_weight, report.per_weight):
+        raise ChampionPackageError("adapter portfolio settings do not match research evidence")
+    if rebalance_interval != report.rebalance_interval:
+        raise ChampionPackageError("adapter rebalance interval does not match research evidence")
+    universe_schema = _load_schema(repository_root, "universe")
+    Draft202012Validator(universe_schema, format_checker=FormatChecker()).validate(
+        universe_document
+    )
+    if str(universe_document.get("as_of")) != as_of:
+        raise ChampionPackageError("universe as_of does not match research evidence")
+    expected_symbols = set(snapshot_symbols)
+    universe_members = universe_document.get("members")
+    if not isinstance(universe_members, list):
+        raise ChampionPackageError("universe members are unavailable")
+    actual_symbols = {str(member["symbol"]) for member in universe_members}
+    if actual_symbols != expected_symbols:
+        raise ChampionPackageError("universe members do not match the research snapshot")
+    gate_evaluation = evaluate_promotion_gate(report, promotion_gate)
     if gate_evaluation["status"] != "pass":
         raise ChampionPackageError(
             "promotion gate failed: " + ", ".join(gate_evaluation["failures"])
@@ -388,12 +422,9 @@ def promote_baseline_model(
     market_rules = dict(PILOT_MARKET_RULES)
     execution_policy = dict(PILOT_EXECUTION_POLICY)
     portfolio_risk = dict(PILOT_PORTFOLIO_RISK)
-    universe = build_universe_document(
-        symbols=snapshot_symbols,
-        as_of=as_of,
-        generated_at=generated_text,
-        dataset_manifest=dataset_manifest,
-    )
+    universe = dict(universe_document)
+    universe_policy_id = str(universe["universe_policy_id"])
+    universe_policy_version = str(universe["universe_policy_version"])
 
     model_bundle_sha256 = actual_bundle_sha256
     adapter_source = _generate_adapter_source(feature_names)
@@ -403,6 +434,7 @@ def promote_baseline_model(
         "model_bundle_sha256": model_bundle_sha256,
         "top_k": top_k,
         "per_weight": per_weight,
+        "rebalance_interval": rebalance_interval,
     }
     config_bytes = canonical_json_bytes(config_document) + b"\n"
     code_sha256 = hashlib.sha256(adapter_code_bytes).hexdigest()
@@ -435,15 +467,19 @@ def promote_baseline_model(
     lockfile_sha256 = hashlib.sha256(lockfile.read_bytes()).hexdigest()
     universe_snapshot = UniverseSnapshot(
         universe_id=str(universe["universe_id"]),
-        universe_policy_id=UNIVERSE_POLICY_ID,
-        universe_policy_version=UNIVERSE_POLICY_VERSION,
+        universe_policy_id=universe_policy_id,
+        universe_policy_version=universe_policy_version,
         source_sha256=canonical_json_sha256(universe),
         as_of=datetime.strptime(as_of, "%Y-%m-%d").date(),
         members=tuple(
             UniverseMember(
                 symbol=str(member["symbol"]),
                 valid_from=datetime.strptime(member["valid_from"], "%Y-%m-%d").date(),
-                valid_to=None,
+                valid_to=(
+                    datetime.strptime(member["valid_to"], "%Y-%m-%d").date()
+                    if member.get("valid_to")
+                    else None
+                ),
                 eligible=bool(member["eligible"]),
                 reason_codes=tuple(member["reason_codes"]),
             )
@@ -461,6 +497,13 @@ def promote_baseline_model(
         "test_start": report.test_start.isoformat(),
         "test_end": report.test_end.isoformat(),
         "validation_ic_mean": report.validation_ic_mean,
+        "score_orientation": report.score_orientation,
+        "top_k": report.top_k,
+        "per_weight": report.per_weight,
+        "rebalance_interval": report.rebalance_interval,
+        "model_refit_interval": report.model_refit_interval,
+        "oos_refit_count": report.oos_refit_count,
+        "oos_max_label_end": report.oos_max_label_end.isoformat(),
         "metrics": dict(report.metrics),
         "leak_checks": [
             {"check_id": check.check_id, "status": check.status, "detail": check.detail}
@@ -483,8 +526,8 @@ def promote_baseline_model(
         "dataset_family_id": str(dataset_manifest["dataset_family_id"]),
         "data_schema_sha256": str(dataset_manifest["data_schema_sha256"]),
         "normalization_version": str(dataset_manifest["normalization_version"]),
-        "universe_policy_id": UNIVERSE_POLICY_ID,
-        "universe_policy_version": UNIVERSE_POLICY_VERSION,
+        "universe_policy_id": universe_policy_id,
+        "universe_policy_version": universe_policy_version,
     }
     champion = {
         "contract_id": "champion",
@@ -619,6 +662,14 @@ def load_active_champion(runtime_root: Path) -> dict[str, Any] | None:
         raise ChampionPackageError("active champion pointer must be an object")
     if pointer_bytes != canonical_json_bytes(document) + b"\n":
         raise ChampionPackageError("active champion pointer must be canonical")
+    pointer_schema = json.loads(
+        (REPOSITORY_ROOT / "contracts/schemas/active-champion.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    Draft202012Validator(
+        pointer_schema, format_checker=FormatChecker()
+    ).validate(document)
     if not CHAMPION_ID_PATTERN.fullmatch(str(document.get("champion_id"))):
         raise ChampionPackageError("active champion id is invalid")
     return document
@@ -647,11 +698,14 @@ def activate_champion(
     runtime_root: Path,
     champion_id: str,
     activated_at: datetime,
+    approval_id: str,
 ) -> dict[str, Any]:
-    """Verify a frozen package, then atomically flip the active pointer."""
+    """Verify a package, persist approval evidence, then flip the pointer."""
     runtime_root = Path(runtime_root)
     if activated_at.tzinfo is None or activated_at.utcoffset().total_seconds() != 0:
         raise ValueError("activated_at must be timezone-aware UTC")
+    if not approval_id.strip() or len(approval_id) > 120:
+        raise ValueError("approval_id must contain 1 to 120 characters")
     package_dir = _resolve_champion_package(runtime_root, champion_id)
     champion = json.loads((package_dir / "champion.json").read_text(encoding="utf-8"))
     receipt = json.loads((package_dir / "promotion-receipt.json").read_text(encoding="utf-8"))
@@ -715,17 +769,75 @@ def activate_champion(
     if hashlib.sha256(bundle_bytes).hexdigest() != receipt["model_bundle_sha256"]:
         raise ChampionPackageError("model bundle hash mismatch in frozen package")
 
+    previous_pointer = load_active_champion(runtime_root)
+    previous_champion_id = (
+        str(previous_pointer["champion_id"]) if previous_pointer is not None else None
+    )
+    activated_text = activated_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    activation_identity = {
+        "champion_id": champion_id,
+        "champion_sha256": canonical_json_sha256(champion),
+        "approval_id": approval_id,
+        "activated_at": activated_text,
+        "previous_champion_id": previous_champion_id,
+    }
+    activation_id = "activation-" + canonical_json_sha256(activation_identity)[:20]
     pointer = {
+        "contract_id": "active-champion",
+        "schema_version": "1.0.0",
         "pointer_id": "active-champion/v1",
+        "activation_id": activation_id,
         "champion_id": champion_id,
         "champion_sha256": canonical_json_sha256(champion),
         "receipt_sha256": canonical_json_sha256(receipt),
-        "activated_at": activated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "approval_id": approval_id,
+        "activated_at": activated_text,
+        "previous_champion_id": previous_champion_id,
         "promotion_id": str(receipt["promotion_id"]),
     }
+    pointer_schema = json.loads(
+        (REPOSITORY_ROOT / "contracts/schemas/active-champion.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    Draft202012Validator(
+        pointer_schema, format_checker=FormatChecker()
+    ).validate(pointer)
+
+    pointer_bytes = canonical_json_bytes(pointer) + b"\n"
+    activation_receipt = {
+        "contract_id": "champion-activation",
+        "schema_version": "1.0.0",
+        "activation_id": activation_id,
+        "champion_id": champion_id,
+        "champion_sha256": pointer["champion_sha256"],
+        "approval_id": approval_id,
+        "activated_at": activated_text,
+        "previous_champion_id": previous_champion_id,
+        "pointer_sha256": hashlib.sha256(pointer_bytes).hexdigest(),
+    }
+    activation_schema = json.loads(
+        (REPOSITORY_ROOT / "contracts/schemas/champion-activation.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    Draft202012Validator(
+        activation_schema, format_checker=FormatChecker()
+    ).validate(activation_receipt)
+    receipt_dir = runtime_root / "activation-receipts"
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    receipt_path = receipt_dir / f"{activation_id}.json"
+    if receipt_path.exists() or receipt_path.is_symlink():
+        raise FileExistsError(f"activation receipt already exists: {activation_id}")
+    receipt_temporary = receipt_path.with_name(
+        f".{receipt_path.name}.{os.getpid()}.tmp"
+    )
+    receipt_temporary.write_bytes(canonical_json_bytes(activation_receipt))
+    os.replace(receipt_temporary, receipt_path)
+
     pointer_path = runtime_root / "active-champion.json"
     pointer_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = pointer_path.with_name(f".{pointer_path.name}.tmp")
-    temporary.write_bytes(canonical_json_bytes(pointer) + b"\n")
+    temporary.write_bytes(pointer_bytes)
     os.replace(temporary, pointer_path)
     return pointer

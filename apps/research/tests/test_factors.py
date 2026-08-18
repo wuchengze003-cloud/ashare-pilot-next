@@ -1,7 +1,6 @@
 import pandas as pd
 import pytest
-from ashare_research_app.factors import FACTOR_NAMES, add_factors
-from ashare_research_app.market_data import COLUMNS
+from ashare_research_app.factors import COLUMNS, FACTOR_NAMES, add_factors
 
 
 def _sample_df(n_symbols: int = 2, n_days: int = 60) -> pd.DataFrame:

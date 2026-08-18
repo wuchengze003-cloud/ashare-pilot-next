@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/static-web-release/1.0.0",
+  "title": "Static Web Release",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id", "schema_version", "release_id", "generated_at", "as_of",
+    "signal_id", "signal_sha256", "account_state_id", "account_state_sha256", "files"
+  ],
+  "properties": {
+    "contract_id": {"const": "static-web-release"},
+    "schema_version": {"const": "1.0.0"},
+    "release_id": {"type": "string", "pattern": "^web-[a-f0-9]{20}$"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "as_of": {"type": "string", "format": "date"},
+    "signal_id": {"type": "string", "minLength": 3, "maxLength": 160},
+    "signal_sha256": {"$ref": "#/$defs/sha256"},
+    "account_state_id": {"type": "string", "minLength": 3, "maxLength": 160},
+    "account_state_sha256": {"$ref": "#/$defs/sha256"},
+    "files": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "file_size_bytes"],
+        "properties": {
+          "path": {
+            "enum": [
+              "app.css", "app.js", "index.html", "production-signal.json",
+              "simulated-account-state.json"
+            ]
+          },
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "file_size_bytes": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

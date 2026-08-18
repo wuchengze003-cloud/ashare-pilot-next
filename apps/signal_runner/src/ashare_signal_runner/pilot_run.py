@@ -21,6 +21,8 @@ import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from jsonschema import Draft202012Validator, FormatChecker
+
 from .pipeline import build_run, load_committed_run, publish_run
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -58,6 +60,12 @@ def resolve_active_champion(runtime_root: Path) -> tuple[Path, Path, dict, str]:
     champion_id = str(pointer["champion_id"])
     if not CHAMPION_ID.fullmatch(champion_id):
         raise ValueError("active champion id is invalid")
+    pointer_schema = _load_json_object(
+        ROOT / "contracts/schemas/active-champion.schema.json"
+    )
+    Draft202012Validator(
+        pointer_schema, format_checker=FormatChecker()
+    ).validate(pointer)
     champions_dir = runtime_root / "champions"
     package_dir = champions_dir / champion_id
     if champions_dir.is_symlink() or package_dir.is_symlink():

@@ -1,0 +1,11 @@
+{
+  "contract_id": "champion-activation",
+  "schema_version": "1.0.0",
+  "activation_id": "activation-0123456789abcdef0123",
+  "champion_id": "champ-0123456789abcdef0123",
+  "champion_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "approval_id": "manual-approval-20260818",
+  "activated_at": "2026-08-18T12:00:00Z",
+  "previous_champion_id": null,
+  "pointer_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

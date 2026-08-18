@@ -11,6 +11,7 @@ M1 collected ``adj_factor`` but did not apply it; this module is the M4 step.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -54,7 +55,7 @@ class AdjustedDailyBar:
             )
         for field in ("open", "high", "low", "close"):
             value = float(getattr(self, field))
-            if value <= 0:
+            if not math.isfinite(value) or value <= 0:
                 raise NormalizationError(
                     "NON_POSITIVE_PRICE",
                     f"{field} must be greater than zero after adjustment",
@@ -81,15 +82,35 @@ def forward_adjust(
     ``(symbol, trade_date)``. Missing factors are rejected rather than silently
     publishing unadjusted prices.
     """
+    latest_bar_date: dict[str, date] = {}
+    for bar in bars:
+        current = latest_bar_date.get(bar.symbol)
+        if current is None or bar.trade_date > current:
+            latest_bar_date[bar.symbol] = bar.trade_date
+
     factor_map: dict[tuple[str, date], float] = {}
     latest_factor: dict[str, float] = {}
     latest_date: dict[str, date] = {}
     for factor in factors:
         validate_symbol(factor.ts_code, context="adj_factor")
-        if factor.adj_factor <= 0:
+        if not math.isfinite(factor.adj_factor) or factor.adj_factor <= 0:
             raise NormalizationError(
                 "NON_POSITIVE_ADJ_FACTOR",
                 f"adj_factor must be positive, got {factor.adj_factor}",
+                symbol=factor.ts_code,
+                trade_date=factor.trade_date,
+            )
+        if factor.ts_code not in latest_bar_date:
+            raise NormalizationError(
+                "UNEXPECTED_ADJ_FACTOR_SYMBOL",
+                "adjustment factor has no matching symbol in the bar snapshot",
+                symbol=factor.ts_code,
+                trade_date=factor.trade_date,
+            )
+        if factor.trade_date > latest_bar_date[factor.ts_code]:
+            raise NormalizationError(
+                "FUTURE_ADJ_FACTOR",
+                "adjustment factor is later than the symbol bar snapshot",
                 symbol=factor.ts_code,
                 trade_date=factor.trade_date,
             )

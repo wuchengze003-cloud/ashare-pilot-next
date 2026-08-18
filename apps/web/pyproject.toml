@@ -1,0 +1,20 @@
+[project]
+name = "ashare-web"
+version = "0.1.0"
+description = "Read-only static release builder for verified A-share production contracts"
+requires-python = ">=3.11"
+dependencies = [
+  "ashare-signal-runner",
+  "jsonschema[format]>=4.25,<5"
+]
+
+[tool.uv.sources]
+ashare-signal-runner = {workspace = true}
+
+[project.scripts]
+ashare-web-build = "ashare_web.release:main"
+ashare-web-serve = "ashare_web.server:main"
+
+[build-system]
+requires = ["uv_build>=0.10.8,<0.11.0"]
+build-backend = "uv_build"

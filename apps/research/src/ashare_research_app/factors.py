@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import pandas as pd
 
+COLUMNS: tuple[str, ...] = (
+    "symbol", "trade_date", "open", "high", "low", "close", "volume", "amount"
+)
+
 FACTOR_NAMES: tuple[str, ...] = (
     "ret_1d",
     "ret_5d",

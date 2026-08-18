@@ -205,7 +205,7 @@ class AdjFactorRecord:
 
     def __post_init__(self) -> None:
         validate_symbol(self.ts_code, context="adj_factor")
-        if self.adj_factor <= 0:
+        if not math.isfinite(self.adj_factor) or self.adj_factor <= 0:
             raise ValueError(f"adj_factor: must be positive, got {self.adj_factor}")
 
 

@@ -6,11 +6,9 @@ Policy enforced here:
   services/, tools/, and ops/ are English.
 - CJK string literals are allowed only in the user-facing UI/output strings
   enumerated below:
-  * tools/*.py (dashboard HTML and CLI output),
-  * tools/dashboard_assets/* user-facing static assets,
+  * tools/*.py CLI output,
   * test files under */tests/ (Chinese stock names in fixture data),
-  * champion.py FEATURE_LABELS and KEY_FEATURES display-label assignments,
-  * apps/web/static/*.html user-facing HTML.
+  * apps/web/static/* user-facing assets.
 Any other CJK string literal is a violation.
 Exit code 0 means the policy holds; 1 reports every violation.
 """
@@ -30,7 +28,6 @@ CODE_ROOTS = ("apps", "packages", "services", "tools", "ops")
 PY_SUFFIXES = {".py"}
 JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".sh"}
 HTML_SUFFIXES = {".html", ".htm"}
-CHAMPION_UI_VARIABLES = {"FEATURE_LABELS", "KEY_FEATURES"}
 
 
 def _has_cjk(text: str) -> bool:
@@ -92,25 +89,12 @@ def _walk_python(path: Path, violations: list[str], root: Path = ROOT) -> None:
         or "/tests/" in f"/{relative}"
         or relative.startswith("apps/web/static/")
     )
-    allowed_node_ids: set[int] = set()
-    if path.name == "champion.py":
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-                continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(
-                isinstance(target, ast.Name) and target.id in CHAMPION_UI_VARIABLES
-                for target in targets
-            ):
-                for child in ast.walk(node.value):
-                    allowed_node_ids.add(id(child))
-
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
         if not _has_cjk(node.value):
             continue
-        if allow_all_strings or id(node) in allowed_node_ids:
+        if allow_all_strings:
             continue
         snippet = " ".join(node.value.split())
         violations.append(
@@ -163,7 +147,7 @@ def check_language(root: Path = ROOT) -> list[str]:
             suffix = path.suffix.lower()
             if suffix in PY_SUFFIXES:
                 _walk_python(path, violations, root)
-            elif path.is_relative_to(root / "tools" / "dashboard_assets"):
+            elif path.is_relative_to(root / "apps" / "web" / "static"):
                 continue
             elif suffix in JS_SUFFIXES:
                 _walk_plain_code(path, violations, root)
