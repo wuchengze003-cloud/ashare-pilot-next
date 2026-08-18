@@ -37,17 +37,47 @@ MARKET_AUXILIARY_FEATURE_NAMES: tuple[str, ...] = (
     *DAILY_AUXILIARY_FEATURE_NAMES,
     *HOLDER_FEATURE_NAMES,
 )
+SLOW_MARKET_AUXILIARY_FEATURE_NAMES: tuple[str, ...] = (
+    "ret_1d",
+    "ret_5d",
+    "ret_10d",
+    "ret_20d",
+    "ret_60d",
+    "ret_120d",
+    "ret_60_20",
+    "ma5_20",
+    "ma20_60",
+    "vol_20d",
+    "vol_60d",
+    "high_low",
+    "amt_20d",
+    "vol_avg_20d",
+    "size_log",
+    "pe_ttm",
+    "pb",
+    "ps_ttm",
+    "dv_ttm",
+    "ep",
+    "turnover_rate_f",
+    "volume_ratio",
+    "main_flow",
+    "holder_change",
+)
 MIN_OBSERVATIONS = 21
+SLOW_MIN_OBSERVATIONS = 121
 FEATURE_TRANSFORMS: tuple[str, ...] = (
     "raw",
     "cross_sectional_rank",
     "market_auxiliary_rank",
+    "slow_market_auxiliary_rank",
 )
 
 
 def feature_names_for_transform(feature_transform: str) -> tuple[str, ...]:
     if feature_transform == "market_auxiliary_rank":
         return MARKET_AUXILIARY_FEATURE_NAMES
+    if feature_transform == "slow_market_auxiliary_rank":
+        return SLOW_MARKET_AUXILIARY_FEATURE_NAMES
     if feature_transform in {"raw", "cross_sectional_rank"}:
         return FEATURE_NAMES
     raise ValueError(f"unsupported feature_transform: {feature_transform}")
@@ -60,7 +90,11 @@ class FeatureRow:
     values: tuple[float, ...]
 
     def __post_init__(self) -> None:
-        allowed_widths = {len(FEATURE_NAMES), len(MARKET_AUXILIARY_FEATURE_NAMES)}
+        allowed_widths = {
+            len(FEATURE_NAMES),
+            len(MARKET_AUXILIARY_FEATURE_NAMES),
+            len(SLOW_MARKET_AUXILIARY_FEATURE_NAMES),
+        }
         if len(self.values) not in allowed_widths:
             raise ValueError("feature row width is not registered")
         if any(not math.isfinite(value) for value in self.values):
@@ -115,6 +149,79 @@ def compute_feature_row(
     )
 
 
+def _sample_standard_deviation(values: Sequence[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    average = sum(values) / len(values)
+    variance = sum((value - average) ** 2 for value in values) / (len(values) - 1)
+    return math.sqrt(variance)
+
+
+def compute_slow_market_auxiliary_row(
+    history: Sequence[DailyBar],
+    index: int,
+    *,
+    daily_values: tuple[float | None, ...],
+    holder_values: tuple[float | None, float | None],
+) -> tuple[float | None, ...] | None:
+    """Rebuild the former slow-alpha feature idea with point-in-time inputs."""
+    if index + 1 < SLOW_MIN_OBSERVATIONS:
+        return None
+    if len(daily_values) != len(DAILY_AUXILIARY_FEATURE_NAMES):
+        raise ValueError("daily auxiliary feature width is invalid")
+    daily = dict(zip(DAILY_AUXILIARY_FEATURE_NAMES, daily_values, strict=True))
+    current = history[index]
+    closes = [bar.close for bar in history]
+    recent_5 = history[index - 4 : index + 1]
+    recent_20 = history[index - 19 : index + 1]
+    recent_60 = history[index - 59 : index + 1]
+    returns_60 = [
+        history[position].close / history[position - 1].close - 1.0
+        for position in range(index - 59, index + 1)
+    ]
+    returns_20 = returns_60[-20:]
+    average_close_5 = sum(bar.close for bar in recent_5) / len(recent_5)
+    average_close_20 = sum(bar.close for bar in recent_20) / len(recent_20)
+    average_close_60 = sum(bar.close for bar in recent_60) / len(recent_60)
+    circ_mv = daily["circ_mv"]
+    pe_ttm = daily["pe_ttm"]
+    net_mf_amount = daily["net_mf_amount"]
+    size_log = -math.log(circ_mv) if circ_mv is not None and circ_mv > 0 else None
+    ep = 1.0 / pe_ttm if pe_ttm is not None and pe_ttm > 0 else None
+    main_flow = (
+        net_mf_amount * 10000.0 / current.amount
+        if net_mf_amount is not None and current.amount > 0
+        else None
+    )
+    _holder_log, holder_change = holder_values
+    return (
+        _return(history, index, 1),
+        _return(history, index, 5),
+        _return(history, index, 10),
+        _return(history, index, 20),
+        _return(history, index, 60),
+        _return(history, index, 120),
+        closes[index - 20] / closes[index - 60] - 1.0,
+        average_close_5 / average_close_20 - 1.0,
+        average_close_20 / average_close_60 - 1.0,
+        _sample_standard_deviation(returns_20),
+        _sample_standard_deviation(returns_60),
+        (current.high - current.low) / current.close,
+        sum(bar.amount for bar in recent_20) / len(recent_20),
+        sum(bar.volume for bar in recent_20) / len(recent_20),
+        size_log,
+        pe_ttm,
+        daily["pb"],
+        daily["ps_ttm"],
+        daily["dv_ttm"],
+        ep,
+        daily["turnover_rate_f"],
+        daily["volume_ratio"],
+        main_flow,
+        holder_change,
+    )
+
+
 def build_feature_panel(
     snapshot: DatasetSnapshot,
     *,
@@ -128,7 +235,7 @@ def build_feature_panel(
     cutoff = as_of if as_of is not None else snapshot.as_of
     if cutoff > snapshot.as_of:
         raise ValueError("feature panel cannot request data after the snapshot as_of")
-    if feature_transform == "market_auxiliary_rank":
+    if feature_transform in {"market_auxiliary_rank", "slow_market_auxiliary_rank"}:
         if feature_dataset is None:
             raise ValueError("market_auxiliary_rank requires an immutable feature dataset")
         feature_dataset.assert_matches_snapshot(snapshot)
@@ -145,10 +252,8 @@ def build_feature_panel(
     for symbol in sorted(by_symbol):
         history = sorted(by_symbol[symbol], key=lambda bar: bar.trade_date)
         for index in range(len(history)):
-            values = compute_feature_row(history, index)
-            if values is None:
-                continue
-            if feature_dataset is not None:
+            if feature_transform == "slow_market_auxiliary_rank":
+                assert feature_dataset is not None
                 daily_values = feature_dataset.daily_values(
                     symbol=symbol,
                     trade_date=history[index].trade_date,
@@ -157,7 +262,26 @@ def build_feature_panel(
                     symbol=symbol,
                     through=history[index].trade_date,
                 )
-                values = (*values, *daily_values, *holder_values)
+                values = compute_slow_market_auxiliary_row(
+                    history,
+                    index,
+                    daily_values=daily_values,
+                    holder_values=holder_values,
+                )
+            else:
+                values = compute_feature_row(history, index)
+                if values is not None and feature_dataset is not None:
+                    daily_values = feature_dataset.daily_values(
+                        symbol=symbol,
+                        trade_date=history[index].trade_date,
+                    )
+                    holder_values = feature_dataset.holder_values(
+                        symbol=symbol,
+                        through=history[index].trade_date,
+                    )
+                    values = (*values, *daily_values, *holder_values)
+            if values is None:
+                continue
             rows.append((symbol, history[index].trade_date, values))
     ordered = tuple(sorted(rows, key=lambda row: (row[0], row[1])))
     if feature_transform == "raw":

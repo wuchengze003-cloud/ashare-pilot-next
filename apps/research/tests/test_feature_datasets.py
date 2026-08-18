@@ -21,6 +21,7 @@ from ashare_research_app.feature_datasets import (
 )
 from ashare_research_app.features import (
     MARKET_AUXILIARY_FEATURE_NAMES,
+    SLOW_MARKET_AUXILIARY_FEATURE_NAMES,
     build_feature_panel,
 )
 from test_baseline_ml import contract_documents, synthetic_snapshot
@@ -193,8 +194,10 @@ def test_feature_dataset_loader_rejects_tampered_content(tmp_path: Path) -> None
         )
 
 
-def _synthetic_feature_dataset(*, future_holder_num: int = 9000) -> FeatureDataset:
-    snapshot = synthetic_snapshot()
+def _synthetic_feature_dataset(
+    *, future_holder_num: int = 9000, days: int = 80
+) -> FeatureDataset:
+    snapshot = synthetic_snapshot(days=days)
     calendar = sorted({bar.trade_date for bar in snapshot.records})
     daily_values = {
         (bar.symbol, bar.trade_date): (
@@ -304,4 +307,58 @@ def test_walk_forward_binds_auxiliary_dataset_and_passes_leak_checks() -> None:
 
     assert report.feature_dataset_id == feature_dataset.feature_dataset_id
     assert report.feature_dataset_manifest_sha256 == feature_dataset.manifest_sha256
+    assert all(check.status == "pass" for check in report.leak_checks)
+
+
+def test_slow_feature_panel_is_causal_and_reuses_point_in_time_inputs() -> None:
+    snapshot = synthetic_snapshot(days=180)
+    feature_dataset = _synthetic_feature_dataset(days=180)
+    calendar = sorted({bar.trade_date for bar in snapshot.records})
+    cutoff = calendar[155]
+
+    full = build_feature_panel(
+        snapshot,
+        feature_transform="slow_market_auxiliary_rank",
+        feature_dataset=feature_dataset,
+    )
+    truncated = build_feature_panel(
+        snapshot,
+        as_of=cutoff,
+        feature_transform="slow_market_auxiliary_rank",
+        feature_dataset=feature_dataset,
+    )
+
+    assert truncated == tuple(row for row in full if row.trade_date <= cutoff)
+    assert all(len(row.values) == len(SLOW_MARKET_AUXILIARY_FEATURE_NAMES) for row in full)
+
+
+def test_slow_walk_forward_uses_mature_60_day_labels_and_rolling_window() -> None:
+    snapshot = synthetic_snapshot(days=360)
+    feature_dataset = _synthetic_feature_dataset(days=360)
+    documents = contract_documents()
+
+    _model, _production, report = run_walk_forward(
+        snapshot,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(
+            top_k=4,
+            per_weight=0.24,
+            model_kind="ridge",
+            feature_transform="slow_market_auxiliary_rank",
+            label_transform="cross_sectional_demean",
+            training_lookback_days=120,
+            use_market_timing=True,
+        ),
+        horizons=(60,),
+        feature_dataset=feature_dataset,
+    )
+
+    assert report.label_transform == "cross_sectional_demean"
+    assert report.training_lookback_days == 120
+    assert report.use_market_timing is True
+    assert report.market_regime_latest in {"INVESTED", "FLAT"}
+    assert report.oos_max_label_end < report.latest_signal_date
     assert all(check.status == "pass" for check in report.leak_checks)

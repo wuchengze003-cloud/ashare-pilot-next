@@ -1,6 +1,7 @@
 """Authoritative, deterministic financial semantics."""
 
 from .costs import CostBreakdown, calculate_cost, select_cost_segment
+from .market_regime import MarketRegimePoint, hysteresis_market_regime
 from .portfolio import validate_portfolio_targets
 from .signals import validate_target_transition
 from .sim_portfolio import (
@@ -51,6 +52,7 @@ __all__ = [
     "HealthSnapshot",
     "Holding",
     "MarketRuleSegment",
+    "MarketRegimePoint",
     "RiskAction",
     "RuntimeState",
     "SimulatedExecutionError",
@@ -66,6 +68,7 @@ __all__ = [
     "constrain_execution_targets",
     "execute_buy",
     "execute_sell",
+    "hysteresis_market_regime",
     "is_limit_down",
     "is_limit_up",
     "mark_to_market",

@@ -21,8 +21,13 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 DEFAULT_HORIZONS: tuple[int, ...] = (1, 3, 5)
-MODEL_CODE_VERSION = "sklearn-multi-horizon/v3"
-MODEL_KINDS: tuple[str, ...] = ("ridge", "hist_gradient_boosting", "extra_trees")
+MODEL_CODE_VERSION = "sklearn-multi-horizon/v4"
+MODEL_KINDS: tuple[str, ...] = (
+    "ridge",
+    "hist_gradient_boosting",
+    "hist_gradient_boosting_slow",
+    "extra_trees",
+)
 RANDOM_STATE = 20260804
 
 
@@ -79,6 +84,15 @@ class MultiHorizonModel:
                 max_features=1.0,
                 random_state=RANDOM_STATE,
                 n_jobs=-1,
+            )
+        if self.model_kind == "hist_gradient_boosting_slow":
+            return HistGradientBoostingRegressor(
+                max_iter=200,
+                learning_rate=0.05,
+                max_depth=5,
+                min_samples_leaf=50,
+                l2_regularization=1.0,
+                random_state=RANDOM_STATE,
             )
         return HistGradientBoostingRegressor(
             max_iter=120,

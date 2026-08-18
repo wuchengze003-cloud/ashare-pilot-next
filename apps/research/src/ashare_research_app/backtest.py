@@ -25,6 +25,7 @@ from ashare_quant_core import (
     classify_board,
     execute_buy,
     execute_sell,
+    hysteresis_market_regime,
     mark_to_market,
     parse_market_rules,
     settle_t_plus_one,
@@ -45,7 +46,7 @@ from .features import (
     forward_return_label,
 )
 
-LABEL_HORIZON_FOR_VALIDATION = 5
+LABEL_TRANSFORMS: tuple[str, ...] = ("raw", "cross_sectional_demean")
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,11 @@ class PilotConfig:
     model_refit_interval: int = 20
     model_kind: str = "hist_gradient_boosting"
     feature_transform: str = "raw"
+    label_transform: str = "raw"
+    training_lookback_days: int | None = None
+    use_market_timing: bool = False
+    market_timing_window: int = 120
+    market_timing_band: float = 0.03
 
     def __post_init__(self) -> None:
         if self.initial_capital <= 0:
@@ -73,6 +79,14 @@ class PilotConfig:
             raise ValueError(f"unsupported model_kind: {self.model_kind}")
         if self.feature_transform not in FEATURE_TRANSFORMS:
             raise ValueError(f"unsupported feature_transform: {self.feature_transform}")
+        if self.label_transform not in LABEL_TRANSFORMS:
+            raise ValueError(f"unsupported label_transform: {self.label_transform}")
+        if self.training_lookback_days is not None and self.training_lookback_days < 20:
+            raise ValueError("training_lookback_days must be at least 20")
+        if self.market_timing_window < 2:
+            raise ValueError("market_timing_window must be at least 2")
+        if not 0 <= self.market_timing_band < 1:
+            raise ValueError("market_timing_band must be in [0, 1)")
 
 
 @dataclass(frozen=True)
@@ -102,6 +116,10 @@ class BacktestReport:
     feature_transform: str
     feature_dataset_id: str | None
     feature_dataset_manifest_sha256: str | None
+    label_transform: str
+    training_lookback_days: int | None
+    use_market_timing: bool
+    market_regime_latest: str
     top_k: int
     per_weight: float
     rebalance_interval: int
@@ -170,6 +188,7 @@ def _spearman_ics(
     model: MultiHorizonModel,
     dates: Sequence[date],
     label_must_end_before: date,
+    label_horizon: int,
 ) -> tuple[list[float], date | None]:
     """Rank IC per date; per-symbol labels must end before the given date.
 
@@ -189,13 +208,13 @@ def _spearman_ics(
             )
             if index is None:
                 continue
-            label_end_index = index + LABEL_HORIZON_FOR_VALIDATION
+            label_end_index = index + label_horizon
             if label_end_index >= len(symbol_history):
                 continue
             label_end = symbol_history[label_end_index].trade_date
             if label_end >= label_must_end_before:
                 continue
-            realized = forward_return_label(symbol_history, index, LABEL_HORIZON_FOR_VALIDATION)
+            realized = forward_return_label(symbol_history, index, label_horizon)
             if realized is None:
                 continue
             if max_label_end is None or label_end > max_label_end:
@@ -231,6 +250,31 @@ def _last_known_close(
         if position >= 0:
             prices[symbol] = bars[position].close
     return prices
+
+
+def _causal_equal_weight_market_returns(
+    history: Mapping[str, Sequence[DailyBar]],
+    dates: Sequence[date],
+) -> tuple[tuple[date, float], ...]:
+    """Equal-weight return proxy using only consecutive observed sessions."""
+    date_index = {trade_date: position for position, trade_date in enumerate(dates)}
+    values_by_date: dict[date, list[float]] = {trade_date: [] for trade_date in dates}
+    for bars in history.values():
+        for previous, current in zip(bars, bars[1:], strict=False):
+            if date_index[current.trade_date] != date_index[previous.trade_date] + 1:
+                continue
+            values_by_date[current.trade_date].append(current.close / previous.close - 1.0)
+    return tuple(
+        (
+            trade_date,
+            (
+                sum(values_by_date[trade_date]) / len(values_by_date[trade_date])
+                if values_by_date[trade_date]
+                else 0.0
+            ),
+        )
+        for trade_date in dates
+    )
 
 
 def run_walk_forward(
@@ -321,6 +365,10 @@ def run_walk_forward(
     label_end_ordinals = {
         horizon: np.full(len(ordered_panel), -1, dtype=np.int64) for horizon in horizons
     }
+    feature_date_ordinals = np.asarray(
+        [row.trade_date.toordinal() for row in ordered_panel],
+        dtype=np.int64,
+    )
     for horizon in horizons:
         for position, row in enumerate(ordered_panel):
             symbol_history = history[row.symbol]
@@ -334,6 +382,21 @@ def run_walk_forward(
                 continue
             label_values[horizon][position] = realized
             label_end_ordinals[horizon][position] = end_date.toordinal()
+    if cfg.label_transform == "cross_sectional_demean":
+        positions_by_date: dict[date, list[int]] = {}
+        for position, row in enumerate(ordered_panel):
+            positions_by_date.setdefault(row.trade_date, []).append(position)
+        for horizon in horizons:
+            for positions in positions_by_date.values():
+                available = [
+                    position
+                    for position in positions
+                    if math.isfinite(float(label_values[horizon][position]))
+                ]
+                if not available:
+                    continue
+                mean_label = float(label_values[horizon][available].mean())
+                label_values[horizon][available] -= mean_label
 
     def fit_mature_model(*, cutoff: date) -> tuple[MultiHorizonModel, date]:
         """Fit only labels whose symbol-specific outcome is known by cutoff."""
@@ -345,6 +408,11 @@ def run_walk_forward(
                 (label_end_ordinals[horizon] >= 0)
                 & (label_end_ordinals[horizon] <= cutoff_ordinal)
             )
+            if cfg.training_lookback_days is not None and mature.any():
+                mature_feature_dates = np.unique(feature_date_ordinals[mature])
+                if len(mature_feature_dates) > cfg.training_lookback_days:
+                    earliest = mature_feature_dates[-cfg.training_lookback_days]
+                    mature &= feature_date_ordinals >= earliest
             mature_labels[horizon] = np.where(
                 mature, label_values[horizon], np.nan
             )
@@ -360,12 +428,13 @@ def run_walk_forward(
     production_model, _production_max_label_end = fit_mature_model(
         cutoff=production_cutoff
     )
+    validation_horizon = max(horizons)
     test_start_index = date_index[test_start]
     validation_dates = [
         day
         for day in dates
         if validation_start <= day <= validation_end
-        and date_index[day] + LABEL_HORIZON_FOR_VALIDATION < test_start_index
+        and date_index[day] + validation_horizon < test_start_index
     ]
     if not validation_dates:
         raise ValueError("validation window is empty after label truncation")
@@ -375,6 +444,7 @@ def run_walk_forward(
         model=model,
         dates=validation_dates,
         label_must_end_before=test_start,
+        label_horizon=validation_horizon,
     )
     if not ics or validation_ic_end is None:
         raise ValueError("validation IC produced no observations")
@@ -437,6 +507,14 @@ def run_walk_forward(
     first_nav_date: date | None = None
     executed_days = 0
     asset_samples: list[Decimal] = []
+    market_regime = {
+        point.trade_date: point.invested
+        for point in hysteresis_market_regime(
+            _causal_equal_weight_market_returns(history, dates),
+            moving_average_window=cfg.market_timing_window,
+            band=cfg.market_timing_band,
+        )
+    }
 
     test_dates = [day for day in dates if day >= test_start]
     for execution_date in test_dates:
@@ -455,14 +533,29 @@ def run_walk_forward(
             benchmark_base = tradable
             benchmark_symbols = tuple(sorted(benchmark_base))
 
-        is_rebalance_day = date_index[signal_date] % cfg.rebalance_interval == 0
+        market_invested = (
+            market_regime.get(signal_date, True) if cfg.use_market_timing else True
+        )
+        previous_signal_date = (
+            signal_dates[signal_position - 1] if signal_position > 0 else None
+        )
+        previous_market_invested = (
+            market_regime.get(previous_signal_date, True)
+            if cfg.use_market_timing and previous_signal_date is not None
+            else True
+        )
+        regime_changed = market_invested != previous_market_invested
+        scheduled_rebalance = date_index[signal_date] % cfg.rebalance_interval == 0
+        is_rebalance_day = scheduled_rebalance or regime_changed or not market_invested
         scores = evaluation_scores_by_date.get(signal_date, {})
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         targets = (
             [symbol for symbol, _ in ranked[: cfg.top_k]]
-            if is_rebalance_day
+            if is_rebalance_day and market_invested
             else list(state.holdings)
         )
+        if not market_invested:
+            targets = []
         prev_prices = _last_known_close(
             history,
             history_dates,
@@ -680,7 +773,14 @@ def run_walk_forward(
     latest_signal_date = signal_dates[-1]
     latest_scores = score_production(latest_signal_date)
     latest_ranked = sorted(latest_scores.items(), key=lambda item: (-item[1], item[0]))
-    latest_targets = [symbol for symbol, _ in latest_ranked[: cfg.top_k]]
+    latest_market_invested = (
+        market_regime.get(latest_signal_date, True) if cfg.use_market_timing else True
+    )
+    latest_targets = (
+        [symbol for symbol, _ in latest_ranked[: cfg.top_k]]
+        if latest_market_invested
+        else []
+    )
     latest_prices = _last_known_close(
         history,
         history_dates,
@@ -705,6 +805,8 @@ def run_walk_forward(
         last_close = latest_prices.get(symbol)
         price_band = None
         risk_notes: list[str] = []
+        if not latest_market_invested:
+            risk_notes.append("MARKET_REGIME_FLAT")
         if recommendation == "BUY" and last_close is not None:
             price_band = {"low": round(last_close * 0.98, 4), "high": round(last_close, 4)}
         symbol_history = history.get(symbol, [])
@@ -796,7 +898,8 @@ def run_walk_forward(
                 else "fail"
             ),
             detail=(
-                f"{len(refit_evidence)} expanding-window refits; all labels mature "
+                f"{len(refit_evidence)} point-in-time refits; training lookback="
+                f"{cfg.training_lookback_days or 'expanding'} sessions; all labels mature "
                 f"by the prior-session cutoff; latest included label end "
                 f"{oos_max_label_end.isoformat()}"
             ),
@@ -844,6 +947,10 @@ def run_walk_forward(
         feature_dataset_manifest_sha256=(
             feature_dataset.manifest_sha256 if feature_dataset is not None else None
         ),
+        label_transform=cfg.label_transform,
+        training_lookback_days=cfg.training_lookback_days,
+        use_market_timing=cfg.use_market_timing,
+        market_regime_latest=("INVESTED" if latest_market_invested else "FLAT"),
         top_k=cfg.top_k,
         per_weight=cfg.per_weight,
         rebalance_interval=cfg.rebalance_interval,

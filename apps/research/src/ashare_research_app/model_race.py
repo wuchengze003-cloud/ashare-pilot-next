@@ -23,7 +23,7 @@ from arch.bootstrap import SPA
 from ashare_quant_core import DatasetSnapshot
 
 from .backtest import BacktestReport, PilotConfig, _split_dates, run_walk_forward
-from .baseline_model import TrainingWindow
+from .baseline_model import DEFAULT_HORIZONS, TrainingWindow
 from .datasets import load_manifest, load_snapshot
 from .feature_datasets import FeatureDataset
 from .performance import annualized_sharpe, returns_from_nav_curve
@@ -47,6 +47,10 @@ class CandidateSpec:
     rebalance_interval: int = 5
     model_refit_interval: int = 20
     feature_transform: str = "raw"
+    horizons: tuple[int, ...] = DEFAULT_HORIZONS
+    label_transform: str = "raw"
+    training_lookback_days: int | None = None
+    use_market_timing: bool = False
 
     @property
     def per_weight(self) -> float:
@@ -114,7 +118,11 @@ def _run_candidate(
             model_refit_interval=spec.model_refit_interval,
             model_kind=spec.model_kind,
             feature_transform=spec.feature_transform,
+            label_transform=spec.label_transform,
+            training_lookback_days=spec.training_lookback_days,
+            use_market_timing=spec.use_market_timing,
         ),
+        horizons=spec.horizons,
         training_window=training_window,
         feature_dataset=feature_dataset,
     )

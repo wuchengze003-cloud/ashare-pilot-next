@@ -77,6 +77,31 @@ def run_auxiliary_race(
     repository_root: Path,
     generated_at: datetime,
 ) -> dict[str, Any]:
+    return run_feature_race(
+        snapshot=snapshot,
+        feature_dataset=feature_dataset,
+        ranked_symbols=ranked_symbols,
+        universe_sha256=universe_sha256,
+        repository_root=repository_root,
+        generated_at=generated_at,
+        candidates=CANDIDATES,
+        race_id=RACE_ID,
+    )
+
+
+def run_feature_race(
+    *,
+    snapshot: DatasetSnapshot,
+    feature_dataset: FeatureDataset,
+    ranked_symbols: tuple[str, ...],
+    universe_sha256: str,
+    repository_root: Path,
+    generated_at: datetime,
+    candidates: tuple[Any, ...],
+    race_id: str,
+) -> dict[str, Any]:
+    if not candidates:
+        raise ValueError("feature race requires at least one candidate")
     feature_dataset.assert_matches_snapshot(snapshot)
     available_dates = {record.trade_date for record in snapshot.records}
     required_dates = {
@@ -94,16 +119,16 @@ def run_auxiliary_race(
         raise ValueError("immutable dataset does not cover the pre-registered folds")
 
     reports_by_candidate: dict[str, list[Any]] = {
-        candidate.candidate_id: [] for candidate in CANDIDATES
+        candidate.candidate_id: [] for candidate in candidates
     }
     fold_results: dict[str, list[dict[str, object]]] = {
-        candidate.candidate_id: [] for candidate in CANDIDATES
+        candidate.candidate_id: [] for candidate in candidates
     }
     view_hashes: dict[str, dict[str, str]] = {}
     for fold in FOLDS:
         view_hashes[fold.fold_id] = {}
         views: dict[int, DatasetSnapshot] = {}
-        for universe_size in sorted({candidate.universe_size for candidate in CANDIDATES}):
+        for universe_size in sorted({candidate.universe_size for candidate in candidates}):
             views[universe_size] = _research_view(
                 snapshot,
                 ranked_symbols=ranked_symbols,
@@ -113,7 +138,7 @@ def run_auxiliary_race(
             view_hashes[fold.fold_id][str(universe_size)] = views[
                 universe_size
             ].snapshot_sha256
-        for candidate in CANDIDATES:
+        for candidate in candidates:
             print(f"{fold.fold_id} {candidate.candidate_id}", flush=True)
             report = _run_candidate(
                 snapshot=views[candidate.universe_size],
@@ -133,7 +158,7 @@ def run_auxiliary_race(
         candidate_id: _aggregate(reports)
         for candidate_id, reports in reports_by_candidate.items()
     }
-    common_dates = aggregate_internal[CANDIDATES[0].candidate_id]["dates"]
+    common_dates = aggregate_internal[candidates[0].candidate_id]["dates"]
     if any(result["dates"] != common_dates for result in aggregate_internal.values()):
         raise ValueError("candidate robustness periods do not share dates")
     model_returns = {
@@ -147,7 +172,7 @@ def run_auxiliary_race(
     spa["benchmark"] = "cash-zero-return"
 
     public_aggregates: list[dict[str, object]] = []
-    for candidate in CANDIDATES:
+    for candidate in candidates:
         internal = aggregate_internal[candidate.candidate_id]
         public_aggregates.append(
             {
@@ -172,7 +197,7 @@ def run_auxiliary_race(
         and statistically_superior
     )
     return {
-        "race_id": RACE_ID,
+        "race_id": race_id,
         "dataset_id": snapshot.dataset_id,
         "snapshot_sha256": snapshot.snapshot_sha256,
         "feature_dataset_id": feature_dataset.feature_dataset_id,
@@ -182,10 +207,10 @@ def run_auxiliary_race(
         "data_frequency": "daily",
         "sharpe_threshold": SHARPE_THRESHOLD,
         "minimum_executed_trades": MINIMUM_EXECUTED_TRADES,
-        "candidate_count": len(CANDIDATES),
+        "candidate_count": len(candidates),
         "fold_count": len(FOLDS),
         "holdout_status": "historical_window_previously_observed",
-        "candidate_registry": [asdict(candidate) for candidate in CANDIDATES],
+        "candidate_registry": [asdict(candidate) for candidate in candidates],
         "fold_registry": [
             {
                 "fold_id": fold.fold_id,

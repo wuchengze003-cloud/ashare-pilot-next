@@ -19,6 +19,7 @@ ashare-champion-activate = "ashare_research_app.activate:main"
 ashare-model-race = "ashare_research_app.model_race:main"
 ashare-robustness-race = "ashare_research_app.robustness_race:main"
 ashare-auxiliary-race = "ashare_research_app.auxiliary_race:main"
+ashare-slow-alpha-race = "ashare_research_app.slow_alpha_race:main"
 
 [tool.uv.sources]
 ashare-quant-core = {workspace = true}
