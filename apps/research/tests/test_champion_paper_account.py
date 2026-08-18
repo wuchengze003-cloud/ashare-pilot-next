@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 from ashare_research_app.champion import Fit, paper_backtest
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def _contract(name: str) -> dict:
+    return json.loads(
+        (ROOT / "contracts" / "examples" / f"{name}.example.json").read_text(encoding="utf-8")
+    )
 
 
 def test_suspended_holding_keeps_its_last_observable_value() -> None:
@@ -35,7 +46,15 @@ def test_suspended_holding_keeps_its_last_observable_value() -> None:
         model_evolution=[],
     )
 
-    nav, _ = paper_backtest(panel, fit, pd.Series(dtype=float))
+    nav, turnover, _ = paper_backtest(
+        panel,
+        fit,
+        pd.Series(dtype=float),
+        cost_model=_contract("cost-model"),
+        market_rules=_contract("market-rules"),
+        execution_policy=_contract("execution-policy"),
+    )
 
     assert len(nav) == 2
+    assert len(turnover) == 2
     assert nav.iloc[1] == pytest.approx(nav.iloc[0])

@@ -1,5 +1,6 @@
 """Deterministic production-state resolution."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -51,3 +52,35 @@ def resolve_state(snapshot: HealthSnapshot) -> RuntimeState:
     if snapshot.champion is ChampionHealth.NEVER_ACTIVATED:
         return RuntimeState.FLAT
     return RuntimeState.ACTIVE
+
+
+def constrain_execution_targets(
+    *,
+    state: RuntimeState,
+    desired_shares: Mapping[str, int],
+    current_shares: Mapping[str, int],
+) -> dict[str, int]:
+    """Apply production-state risk constraints to executable share targets.
+
+    Signal Runner owns target-position publication.  Execution consumers still
+    enforce the same state semantics as a defense-in-depth boundary so a
+    malformed degraded signal can never increase simulated risk.
+    """
+    if any(shares < 0 for shares in desired_shares.values()):
+        raise ValueError("desired shares must be non-negative")
+    if any(shares < 0 for shares in current_shares.values()):
+        raise ValueError("current shares must be non-negative")
+
+    symbols = set(desired_shares) | set(current_shares)
+    if state is RuntimeState.ACTIVE:
+        return {symbol: desired_shares.get(symbol, 0) for symbol in symbols}
+    if state is RuntimeState.HOLD:
+        return {symbol: current_shares.get(symbol, 0) for symbol in symbols}
+    if state is RuntimeState.REDUCE_ONLY:
+        return {
+            symbol: min(desired_shares.get(symbol, 0), current_shares.get(symbol, 0))
+            for symbol in symbols
+        }
+    if state is RuntimeState.FLAT:
+        return {symbol: 0 for symbol in symbols}
+    raise ValueError(f"unsupported runtime state: {state}")

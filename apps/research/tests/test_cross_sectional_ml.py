@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from ashare_research_app.cross_sectional_ml import (
+    _mature_relative_labels,
     market_trend_filter,
     nav_from_predictions,
     prepare_panel,
@@ -38,17 +39,19 @@ def test_prepare_panel_label_is_forward_cumulative_return() -> None:
     panel["ret_1d"] = panel.groupby("symbol")["close"].pct_change()
     prepared, feats = prepare_panel(panel, factors=["ret_1d"], label_horizon=5)
     sym = (
-        prepared[prepared["symbol"] == "600000.SH"]
-        .sort_values("trade_date")
-        .reset_index(drop=True)
+        prepared[prepared["symbol"] == "600000.SH"].sort_values("trade_date").reset_index(drop=True)
     )
     row = sym.iloc[0]
     # _fwd_ret = close[t+5] / close[t] - 1
     expected = sym.iloc[5]["close"] / sym.iloc[0]["close"] - 1.0
     assert row["_fwd_ret"] == pytest.approx(expected)
-    # label = fwd_ret minus the day's cross-sectional mean
-    day_mean = prepared[prepared["trade_date"] == row["trade_date"]]["_fwd_ret"].mean()
-    assert row["_label"] == pytest.approx(expected - day_mean)
+    cutoff = pd.Timestamp(prepared["_label_end_date"].max())
+    mature = _mature_relative_labels(prepared, cutoff=cutoff)
+    mature_row = mature[
+        (mature["symbol"] == "600000.SH") & (mature["trade_date"] == row["trade_date"])
+    ].iloc[0]
+    day_mean = mature[mature["trade_date"] == row["trade_date"]]["_fwd_ret"].mean()
+    assert mature_row["_label"] == pytest.approx(expected - day_mean)
 
 
 def test_rolling_fit_is_strictly_out_of_sample() -> None:
@@ -60,8 +63,7 @@ def test_rolling_fit_is_strictly_out_of_sample() -> None:
     assert fit.predictions
     for refit_date in fit.weights or {}:
         mature = prepared[
-            prepared["_label"].notna()
-            & (prepared["_label_end_date"] <= refit_date)
+            prepared["_fwd_ret"].notna() & (prepared["_label_end_date"] <= refit_date)
         ]
         assert mature["trade_date"].nunique() >= 30
 
@@ -76,13 +78,46 @@ def test_future_labels_cannot_change_an_existing_rolling_prediction() -> None:
 
     changed = prepared.copy()
     future = changed["_label_end_date"] > first_refit
-    changed.loc[future, "_label"] = changed.loc[future, "_label"] * -1000.0 + 17.0
+    changed.loc[future, "_fwd_ret"] = changed.loc[future, "_fwd_ret"] * -1000.0 + 17.0
     replay = rolling_fit(changed, feats, window=30, refit_every=10, model="ridge")
 
     assert np.array_equal(
         original.predictions[first_prediction],
         replay.predictions[first_prediction],
     )
+
+
+def test_unmatured_peer_return_cannot_change_a_mature_relative_label() -> None:
+    prepared = pd.DataFrame(
+        [
+            {
+                "symbol": "A",
+                "trade_date": pd.Timestamp("2026-01-01"),
+                "_label_end_date": pd.Timestamp("2026-01-03"),
+                "_fwd_ret": 0.2,
+            },
+            {
+                "symbol": "B",
+                "trade_date": pd.Timestamp("2026-01-01"),
+                "_label_end_date": pd.Timestamp("2026-01-04"),
+                "_fwd_ret": 1.0,
+            },
+        ]
+    )
+
+    before = _mature_relative_labels(
+        prepared,
+        cutoff=pd.Timestamp("2026-01-03"),
+    )
+    changed = prepared.copy()
+    changed.loc[changed["symbol"] == "B", "_fwd_ret"] = 100.0
+    after = _mature_relative_labels(
+        changed,
+        cutoff=pd.Timestamp("2026-01-03"),
+    )
+
+    assert before.loc[before["symbol"] == "A", "_label"].iloc[0] == 0.0
+    assert after.loc[after["symbol"] == "A", "_label"].iloc[0] == 0.0
 
 
 def test_ridge_exposes_factor_weights() -> None:

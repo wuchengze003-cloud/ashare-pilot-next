@@ -318,6 +318,8 @@ def run_cycle(
             generated_text,
             "--out",
             str(runtime_web / "inference-report.json"),
+            "--universe-out",
+            str(runtime_web / "current-universe.json"),
         ]
     )
     if inference.returncode == 4:
@@ -354,6 +356,10 @@ def run_cycle(
             "ashare_signal_runner.pilot_run",
             "--runtime-root",
             str(runtime_pilot),
+            "--dataset-manifest",
+            str(dataset["manifest"]),
+            "--universe",
+            str(runtime_web / "current-universe.json"),
             "--dataset-root",
             str(dataset["root"]),
             "--runs-root",

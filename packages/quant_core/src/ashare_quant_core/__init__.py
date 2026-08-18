@@ -29,7 +29,14 @@ from .snapshots import (
     UniverseMember,
     UniverseSnapshot,
 )
-from .state import ChampionHealth, HealthSnapshot, RiskAction, RuntimeState, resolve_state
+from .state import (
+    ChampionHealth,
+    HealthSnapshot,
+    RiskAction,
+    RuntimeState,
+    constrain_execution_targets,
+    resolve_state,
+)
 from .strategy import Strategy, TargetPosition
 
 __all__ = [
@@ -56,6 +63,7 @@ __all__ = [
     "UniverseSnapshot",
     "calculate_cost",
     "classify_board",
+    "constrain_execution_targets",
     "execute_buy",
     "execute_sell",
     "is_limit_down",

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from ashare_quant_core import ChampionHealth, HealthSnapshot, RiskAction, TargetPosition
+from ashare_signal_runner.pilot_run import resolve_active_champion
 from ashare_signal_runner.runner import (
     ChampionRef,
     ContractSet,
@@ -182,9 +183,7 @@ def test_runner_publishes_reduce_only() -> None:
     )
 
     assert signal["state"] == "REDUCE_ONLY"
-    assert signal["target_positions"] == [
-        {"symbol": "600000.SH", "target_weight": 0.1}
-    ]
+    assert signal["target_positions"] == [{"symbol": "600000.SH", "target_weight": 0.1}]
 
 
 def test_runner_rejects_reduce_only_increase() -> None:
@@ -357,3 +356,22 @@ def test_runner_validates_output_against_schema() -> None:
             ),
             schema=invalid_schema,
         )
+
+
+def test_active_champion_pointer_rejects_path_escape(tmp_path: Path) -> None:
+    pointer = {
+        "pointer_id": "active-champion/v1",
+        "champion_id": "../../outside",
+        "champion_sha256": "a" * 64,
+        "receipt_sha256": "b" * 64,
+        "activated_at": "2026-08-04T01:00:00Z",
+        "promotion_id": "promo-fixture",
+    }
+    pointer_path = tmp_path / "active-champion.json"
+    pointer_path.write_text(
+        json.dumps(pointer, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="champion id is invalid"):
+        resolve_active_champion(tmp_path)

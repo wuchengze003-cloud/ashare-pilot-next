@@ -35,19 +35,31 @@ def _jsonable(value: object) -> object:
 def build_research_report(report, *, initial_capital) -> dict:
     final_state = report.final_state
     prices = report.final_prices
-    market_value = float(
-        mark_to_market(
-            final_state,
-            prices={symbol: prices[symbol] for symbol in final_state.holdings if symbol in prices},
+    market_value = (
+        float(
+            mark_to_market(
+                final_state,
+                prices={
+                    symbol: prices[symbol] for symbol in final_state.holdings if symbol in prices
+                },
+            )
+            - final_state.cash
         )
-        - final_state.cash
-    ) if final_state.holdings else 0.0
-    total_assets = float(
-        mark_to_market(
-            final_state,
-            prices={symbol: prices[symbol] for symbol in final_state.holdings if symbol in prices},
+        if final_state.holdings
+        else 0.0
+    )
+    total_assets = (
+        float(
+            mark_to_market(
+                final_state,
+                prices={
+                    symbol: prices[symbol] for symbol in final_state.holdings if symbol in prices
+                },
+            )
         )
-    ) if final_state.holdings else float(final_state.cash)
+        if final_state.holdings
+        else float(final_state.cash)
+    )
     positions = [
         {
             "symbol": symbol,
@@ -79,9 +91,7 @@ def build_research_report(report, *, initial_capital) -> dict:
             "validation": (
                 f"{report.validation_start.isoformat()}/{report.validation_end.isoformat()}"
             ),
-            "out_of_sample": (
-                f"{report.first_nav_date.isoformat()}/{report.test_end.isoformat()}"
-            ),
+            "out_of_sample": (f"{report.first_nav_date.isoformat()}/{report.test_end.isoformat()}"),
         },
         "production_training_cutoff": report.production_training_cutoff.isoformat(),
         "first_nav_date": report.first_nav_date.isoformat(),
@@ -136,6 +146,11 @@ def main(argv: list[str] | None = None) -> int:
 
     cost_model_path = repository_root / "contracts/examples/cost-model.example.json"
     cost_model_doc = json.loads(cost_model_path.read_text(encoding="utf-8"))
+    promotion_gate_doc = json.loads(
+        (repository_root / "contracts/examples/promotion-gate.example.json").read_text(
+            encoding="utf-8"
+        )
+    )
     market_rules_doc = {
         "contract_id": "market-rules",
         "schema_version": "1.0.0",
@@ -204,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         per_weight=args.per_weight,
         feature_names=FEATURE_NAMES,
+        promotion_gate=promotion_gate_doc,
     )
 
     runtime_root.mkdir(parents=True, exist_ok=True)

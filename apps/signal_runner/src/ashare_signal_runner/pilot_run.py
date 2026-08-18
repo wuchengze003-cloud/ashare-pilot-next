@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ from .pipeline import build_run, load_committed_run, publish_run
 ROOT = Path(__file__).resolve().parents[4]
 
 EXIT_NO_ACTIVE_CHAMPION = 4
+CHAMPION_ID = re.compile(r"^champ-[a-f0-9]{20}$")
 
 
 def _canonical_sha256(document: dict) -> str:
@@ -37,12 +39,33 @@ def _canonical_sha256(document: dict) -> str:
 
 def resolve_active_champion(runtime_root: Path) -> tuple[Path, Path, dict, str]:
     """Return (contracts_dir, adapter_root, champion, champion_id) from the pointer."""
-    pointer_path = Path(runtime_root) / "active-champion.json"
+    runtime_root = Path(runtime_root).resolve()
+    pointer_path = runtime_root / "active-champion.json"
+    if pointer_path.is_symlink():
+        raise ValueError("active champion pointer cannot be a symlink")
     if not pointer_path.is_file():
         raise LookupError("NO_ACTIVE_CHAMPION")
-    pointer = _load_json_object(pointer_path)
+    pointer_bytes = pointer_path.read_bytes()
+    pointer = json.loads(pointer_bytes)
+    if not isinstance(pointer, dict):
+        raise ValueError("active champion pointer must be an object")
+    canonical_pointer = (
+        json.dumps(pointer, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
+        + b"\n"
+    )
+    if pointer_bytes != canonical_pointer:
+        raise ValueError("active champion pointer must be canonical")
     champion_id = str(pointer["champion_id"])
-    package_dir = Path(runtime_root) / "champions" / champion_id
+    if not CHAMPION_ID.fullmatch(champion_id):
+        raise ValueError("active champion id is invalid")
+    champions_dir = runtime_root / "champions"
+    package_dir = champions_dir / champion_id
+    if champions_dir.is_symlink() or package_dir.is_symlink():
+        raise ValueError("active champion package cannot be a symlink")
+    resolved_package = package_dir.resolve(strict=True)
+    if resolved_package.parent != champions_dir.resolve(strict=True):
+        raise ValueError("active champion package escaped the runtime root")
+    package_dir = resolved_package
     champion = _load_json_object(package_dir / "champion.json")
     if _canonical_sha256(champion) != str(pointer["champion_sha256"]):
         raise ValueError("active pointer champion hash does not match package")

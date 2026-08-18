@@ -10,7 +10,13 @@ from ashare_research_app.pilot_research import build_research_report
 from ashare_research_app.promotion import promote_baseline_model
 from ashare_research_app.web_state import build_web_state, load_web_state_schema
 from jsonschema import Draft202012Validator, FormatChecker
-from test_ml_champion_chain import ROOT, contract_documents, synthetic_snapshot, write_dataset_files
+from test_ml_champion_chain import (
+    ROOT,
+    contract_documents,
+    permissive_promotion_gate,
+    synthetic_snapshot,
+    write_dataset_files,
+)
 
 from tools.validate_contracts import validate_semantics
 
@@ -39,6 +45,7 @@ def assembled_document(tmp_path: Path) -> dict:
         top_k=4,
         per_weight=0.24,
         feature_names=FEATURE_NAMES,
+        promotion_gate=permissive_promotion_gate(),
     )
     import json
 
@@ -78,9 +85,7 @@ def test_web_state_document_passes_schema_and_semantics(tmp_path: Path) -> None:
     assert all("rank" in item for item in document["rankings"])
     assert document["model"]["signal_state"] == "UNAVAILABLE"
     assert document["performance"]["leak_checks"]
-    assert all(
-        check["status"] == "pass" for check in document["performance"]["leak_checks"]
-    )
+    assert all(check["status"] == "pass" for check in document["performance"]["leak_checks"])
 
 
 def test_web_state_rejects_unknown_mode(tmp_path: Path) -> None:
@@ -107,6 +112,7 @@ def test_web_state_rejects_unknown_mode(tmp_path: Path) -> None:
         top_k=4,
         per_weight=0.24,
         feature_names=FEATURE_NAMES,
+        promotion_gate=permissive_promotion_gate(),
     )
     import json
 
