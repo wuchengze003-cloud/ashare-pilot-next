@@ -14,10 +14,20 @@ from datetime import date
 
 import numpy as np
 import sklearn
-from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.base import RegressorMixin
+from sklearn.ensemble import ExtraTreesRegressor, HistGradientBoostingRegressor
+from sklearn.linear_model import Ridge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 DEFAULT_HORIZONS: tuple[int, ...] = (1, 3, 5)
-MODEL_CODE_VERSION = "baseline-hgb/v2"
+MODEL_CODE_VERSION = "sklearn-multi-horizon/v4"
+MODEL_KINDS: tuple[str, ...] = (
+    "ridge",
+    "hist_gradient_boosting",
+    "hist_gradient_boosting_slow",
+    "extra_trees",
+)
 RANDOM_STATE = 20260804
 
 
@@ -41,13 +51,57 @@ class TrainingWindow:
 class MultiHorizonModel:
     """One gradient-boosting model per horizon; score is the mean prediction."""
 
-    def __init__(self, *, horizons: tuple[int, ...] = DEFAULT_HORIZONS) -> None:
+    def __init__(
+        self,
+        *,
+        horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+        model_kind: str = "hist_gradient_boosting",
+    ) -> None:
         if not horizons:
             raise ValueError("at least one horizon is required")
+        if model_kind not in MODEL_KINDS:
+            raise ValueError(f"unsupported model_kind: {model_kind}")
         self.horizons = tuple(sorted(horizons))
-        self.models: dict[int, HistGradientBoostingRegressor] = {}
+        self.model_kind = model_kind
+        self.models: dict[int, RegressorMixin] = {}
         self.training_cutoff: date | None = None
         self.orientation = 1
+
+    def _new_estimator(self) -> RegressorMixin:
+        """Return one deterministic estimator from scikit-learn.
+
+        The research race intentionally uses a small pre-registered set instead
+        of a hyperparameter search. This limits data snooping and reuses mature
+        implementations rather than maintaining local learning algorithms.
+        """
+        if self.model_kind == "ridge":
+            return make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+        if self.model_kind == "extra_trees":
+            return ExtraTreesRegressor(
+                n_estimators=120,
+                max_depth=8,
+                min_samples_leaf=30,
+                max_features=1.0,
+                random_state=RANDOM_STATE,
+                n_jobs=-1,
+            )
+        if self.model_kind == "hist_gradient_boosting_slow":
+            return HistGradientBoostingRegressor(
+                max_iter=200,
+                learning_rate=0.05,
+                max_depth=5,
+                min_samples_leaf=50,
+                l2_regularization=1.0,
+                random_state=RANDOM_STATE,
+            )
+        return HistGradientBoostingRegressor(
+            max_iter=120,
+            learning_rate=0.05,
+            max_depth=3,
+            min_samples_leaf=30,
+            l2_regularization=1.0,
+            random_state=RANDOM_STATE,
+        )
 
     def set_orientation(self, orientation: int) -> None:
         """Freeze validation-selected ranking direction into the model bundle."""
@@ -71,14 +125,7 @@ class MultiHorizonModel:
             valid = ~np.isnan(labels)
             if int(valid.sum()) < 20:
                 raise ValueError(f"horizon {horizon} has fewer than 20 training rows")
-            model = HistGradientBoostingRegressor(
-                max_iter=120,
-                learning_rate=0.05,
-                max_depth=3,
-                min_samples_leaf=30,
-                l2_regularization=1.0,
-                random_state=RANDOM_STATE,
-            )
+            model = self._new_estimator()
             model.fit(feature_matrix[valid], labels[valid])
             self.models[horizon] = model
         self.training_cutoff = training_cutoff
@@ -98,6 +145,7 @@ class MultiHorizonModel:
             raise ValueError("cannot serialize an untrained model")
         bundle = {
             "code_version": MODEL_CODE_VERSION,
+            "model_kind": self.model_kind,
             "horizons": list(self.horizons),
             "training_cutoff": self.training_cutoff.isoformat(),
             "orientation": self.orientation,
@@ -122,7 +170,10 @@ class MultiHorizonModel:
                 f"model bundle numpy version {bundle.get('numpy_version')} "
                 f"does not match runtime {np.__version__}"
             )
-        model = MultiHorizonModel(horizons=tuple(bundle["horizons"]))
+        model = MultiHorizonModel(
+            horizons=tuple(bundle["horizons"]),
+            model_kind=str(bundle["model_kind"]),
+        )
         model.models = dict(bundle["models"])
         model.training_cutoff = date.fromisoformat(bundle["training_cutoff"])
         model.set_orientation(int(bundle["orientation"]))

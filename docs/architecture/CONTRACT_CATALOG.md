@@ -6,6 +6,7 @@ semantics, failure behavior, and golden examples.
 | Contract | Producer | Consumer | Failure behavior |
 |---|---|---|---|
 | Dataset Manifest | Data Gateway | Research, Signal Runner | Dataset is not read |
+| Feature Dataset Manifest | Data Gateway | Research | Feature dataset is not read |
 | Universe | Data Gateway/controlled membership task | Research, Signal Runner | Candidate or inference is blocked |
 | Coverage Audit | Data Gateway | Ops, Research governance | Incomplete historical dataset is blocked |
 | Cost Model | Architecture owner | quant_core | Backtest and inference are blocked when no unique date/market rate segment exists |
@@ -16,13 +17,14 @@ semantics, failure behavior, and golden examples.
 | Promotion Gate | Research governance | Research | No promotion |
 | Champion | Research promotion flow | Signal Runner, Web | Degrade per the state machine |
 | Strategy Adapter | Research promotion flow | Signal Runner | Do not load, or keep the previous target per the state machine |
-| Production Signal | Signal Runner | Web, future execution adapter | Do not display as the new target |
+| Production Signal | Signal Runner | Simulated Account, Web | Do not display as the new target |
 | Signal Head | Signal Runner | Signal Runner, Web, Ops | Do not switch the current production signal |
 | Runtime Manifest | Signal Runner/Ops | Web, audit | Do not publish |
 | Stage Health | Each stage | Ops, Web operations | Block downstream stages |
 | Simulated Market Day | Data Gateway/Ops | Simulated Account | Account state does not advance |
-| Simulated Account State | Simulated Account | Simulated Account, future Web | Keep the previous committed state |
-| Simulated Account Head | Simulated Account | Simulated Account, future Web | Do not switch the current state |
+| Simulated Account State | Simulated Account | Simulated Account, Web | Keep the previous committed state |
+| Simulated Account Head | Simulated Account | Simulated Account | Do not switch the current state |
+| Static Web Release | Web builder | Web server/deployer | Do not serve or publish the release |
 
 ## Dataset Manifest 2.0
 
@@ -35,6 +37,18 @@ semantics, failure behavior, and golden examples.
 - `DatasetSnapshot` contains only records with `trade_date <= as_of`; its hash is
   generated from data family, date, schema, normalization version, and normalized
   visible records.
+
+## Feature Dataset Manifest 1.0
+
+- Binds one immutable feature dataset to the exact base Dataset Manifest and
+  Universe hashes used to build it.
+- Daily valuation and money-flow rows remain keyed by their trading date.
+  Shareholder-count observations become visible only on the vendor's explicit
+  announcement date; the reporting-period end date is never a substitute.
+- Every source export is read as a regular file and recorded by path, byte size,
+  and SHA-256. Invalid holder dates and values are quarantined explicitly.
+- Research reads the published normalized bytes only after verifying the
+  Manifest, all file hashes, base-dataset binding, Universe binding, and `as_of`.
 
 ## Coverage Audit 1.0
 
@@ -110,12 +124,26 @@ idempotently.
 - The account consumes only a verified committed Production Signal and advances
   one signal sequence at a time. Replay, skipped sequences, and date rollback
   fail closed.
+- The execution-date Dataset Manifest must have an `as_of` equal to the
+  execution date and name the source signal's Dataset Manifest hash as its
+  direct parent.
 - All fills are explicitly simulated by `quant_core`; artifacts never claim
   broker orders, broker fills, or real holdings.
 - Each immutable state binds the source signal, market day, cost model, market
   rules, execution policy, and previous account state by canonical SHA-256.
 - Runs are committed before the account head advances atomically. Model retraining
   cannot rewrite an earlier state or trade.
+
+## Static Web Release 1.0
+
+- The builder accepts only a verified committed Production Signal and the
+  simulated-account state cryptographically bound to that exact signal.
+- A content-addressed release contains fixed presentation assets, canonical
+  signal/account bytes, and a Manifest with every file size and SHA-256.
+- The bundled server verifies all release bytes again before opening a socket;
+  a changed, missing, duplicated, or symlinked artifact fails closed.
+- Web never reads Research output and never calculates targets, fills, costs, or
+  account state.
 
 ## Cost Model 2.0
 

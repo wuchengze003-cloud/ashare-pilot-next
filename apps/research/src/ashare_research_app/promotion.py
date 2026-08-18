@@ -32,7 +32,9 @@ from ashare_quant_core import UniverseMember, UniverseSnapshot
 from jsonschema import Draft202012Validator, FormatChecker
 
 from .backtest import BacktestReport
+from .canonical import canonical_json_bytes, canonical_json_sha256
 from .features import MIN_OBSERVATIONS, _return, compute_feature_row
+from .performance import annualized_sharpe, returns_from_nav_curve
 
 ADAPTER_ID = "ml-baseline-adapter/v1"
 STRATEGY_ID = "ml-baseline"
@@ -196,14 +198,6 @@ class ChampionPackageError(ValueError):
     """Raised when a frozen champion package cannot be created or verified."""
 
 
-def canonical_json_bytes(document: Mapping[str, Any]) -> bytes:
-    return json.dumps(document, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
-
-
-def canonical_json_sha256(document: Mapping[str, Any]) -> str:
-    return hashlib.sha256(canonical_json_bytes(document)).hexdigest()
-
-
 def _write_json(path: Path, document: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(canonical_json_bytes(document) + b"\n")
@@ -278,14 +272,7 @@ def evaluate_promotion_gate(
     report: BacktestReport,
     gate: Mapping[str, Any],
 ) -> dict[str, Any]:
-    navs = [float(point["nav"]) for point in report.nav_curve]
-    returns = [navs[index] / navs[index - 1] - 1.0 for index in range(1, len(navs))]
-    if len(returns) >= 2:
-        mean = sum(returns) / len(returns)
-        variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)
-        sharpe = mean / math.sqrt(variance) * math.sqrt(252) if variance > 0 else 0.0
-    else:
-        sharpe = 0.0
+    sharpe = annualized_sharpe(returns_from_nav_curve(report.nav_curve))
 
     positions: dict[str, tuple[int, float]] = {}
     realized_profits: list[float] = []
@@ -498,6 +485,12 @@ def promote_baseline_model(
         "test_end": report.test_end.isoformat(),
         "validation_ic_mean": report.validation_ic_mean,
         "score_orientation": report.score_orientation,
+        "model_kind": report.model_kind,
+        "feature_transform": report.feature_transform,
+        "label_transform": report.label_transform,
+        "training_lookback_days": report.training_lookback_days,
+        "use_market_timing": report.use_market_timing,
+        "market_regime_latest": report.market_regime_latest,
         "top_k": report.top_k,
         "per_weight": report.per_weight,
         "rebalance_interval": report.rebalance_interval,

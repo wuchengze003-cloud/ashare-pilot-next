@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from ashare_web.release import build_release, canonical_json_bytes
+from ashare_web.server import make_handler, validate_release_dir
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -69,3 +70,22 @@ def test_build_release_rejects_account_from_another_signal(tmp_path: Path) -> No
             generated_at=datetime(2026, 8, 18, 12, tzinfo=UTC),
         )
     assert not (tmp_path / "releases").exists()
+
+
+def test_server_rechecks_every_release_byte_before_serving(tmp_path: Path) -> None:
+    signal_path, account_path = _inputs(tmp_path)
+    target = build_release(
+        contracts_root=ROOT / "contracts",
+        static_root=ROOT / "apps/web/static",
+        signal_path=signal_path,
+        account_state_path=account_path,
+        releases_root=tmp_path / "releases",
+        generated_at=datetime(2026, 8, 18, 12, tzinfo=UTC),
+    )
+
+    assert validate_release_dir(target) == target.resolve()
+    assert make_handler(target)
+    (target / "app.js").write_text("tampered", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="artifact (size|hash) mismatch"):
+        make_handler(target)

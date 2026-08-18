@@ -1,0 +1,57 @@
+{
+  "contract_id": "feature-dataset-manifest",
+  "schema_version": "1.0.0",
+  "feature_dataset_id": "feature-dataset-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "base_dataset_id": "dataset-sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "base_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "universe_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "feature_schema_id": "market-auxiliary-features/v1",
+  "feature_schema_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "normalization_version": "tushare-market-auxiliary-normalizer/v1",
+  "as_of": "2026-08-17",
+  "generated_at": "2026-08-18T14:00:00Z",
+  "source": "tushare-export-import",
+  "source_version": "v1",
+  "quality_status": "pass",
+  "quality_reasons": ["OPTIONAL_HOLDER_COVERAGE_INCOMPLETE"],
+  "coverage": {
+    "daily_bar_rows": 100,
+    "daily_feature_rows": 100,
+    "daily_basic_present_rows": 99,
+    "moneyflow_present_rows": 98,
+    "holder_rows": 20,
+    "holder_symbols": 8,
+    "missing_holder_symbols": 2,
+    "quarantined_holder_rows": 1,
+    "source_file_count": 12
+  },
+  "files": [
+    {
+      "role": "daily_features",
+      "path": "daily-features.json",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "row_count": 100,
+      "file_size_bytes": 1000,
+      "min_effective_date": "2025-01-02",
+      "max_effective_date": "2026-08-17"
+    },
+    {
+      "role": "holder_snapshots",
+      "path": "holder-snapshots.json",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "row_count": 20,
+      "file_size_bytes": 500,
+      "min_effective_date": "2025-01-03",
+      "max_effective_date": "2026-08-16"
+    },
+    {
+      "role": "source_index",
+      "path": "source-index.json",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "row_count": 12,
+      "file_size_bytes": 800,
+      "min_effective_date": null,
+      "max_effective_date": null
+    }
+  ]
+}
