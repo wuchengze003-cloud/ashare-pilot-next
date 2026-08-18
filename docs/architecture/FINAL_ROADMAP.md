@@ -1,6 +1,7 @@
-# Backend Roadmap
+# Backend Architecture Status
 
-> Status: architecture plan. This document does not authorize production activation.
+> Status: implemented backend boundaries. This document does not authorize
+> production activation.
 
 ## Objective
 
@@ -9,7 +10,8 @@ The backend has two separate products:
 1. A research system that evaluates factors and models on immutable point-in-time datasets.
 2. A simulated account that consumes committed production signals and maintains an append-only cash and position ledger.
 
-The static Web application is a read-only consumer and is deliberately postponed until these backend boundaries are stable.
+The static Web application is a read-only consumer of the committed signal and
+simulated-account contracts.
 
 ## Completed foundation
 
@@ -20,34 +22,44 @@ The static Web application is a read-only consumer and is deliberately postponed
 - Point-in-time holder data keyed by disclosure date rather than report-period end date.
 - An independent simulated-account package with append-only state and committed-signal verification.
 
-## Remaining backend work
+## Implemented backend controls
 
 ### Research evidence
 
-- Import all research inputs through immutable dataset snapshots.
-- Record factor inputs, label horizon, training window, refit date, code hash, and configuration hash.
-- Run causality checks by comparing a full calculation with a calculation truncated at the same `as_of` date.
-- Keep TRAIN, VALID, and TEST roles explicit. TEST results must not select parameters or activate a Champion.
-- Treat Deflated Sharpe and block bootstrap as diagnostics. Their values must be computed from stored inputs and must never be hard-coded in a report.
+- Research inputs are loaded through immutable Dataset and Feature Dataset
+  Manifests.
+- Reports record factor inputs, label horizon, training window, refit date, and
+  immutable input identities.
+- Causality tests compare full calculations with calculations truncated at the
+  same `as_of` date.
+- TRAIN, VALID, and TEST roles are explicit. Observed TEST results do not select
+  parameters or activate a Champion.
+- SPA block bootstrap is computed from stored returns and is diagnostic only.
 
 ### Promotion and activation
 
-- Validate promotion evidence against the registered contract.
-- Verify cross-document dataset, snapshot, model-bundle, code, and configuration hashes.
-- Keep promotion and human activation as separate commands.
-- Verify the complete Champion package in an isolated Signal Runner environment.
+- Promotion evidence is validated against the registered contract.
+- Dataset, snapshot, model-bundle, code, and configuration hashes are verified
+  across the package.
+- Promotion and human activation are separate commands.
+- The complete Champion package is verified in an isolated Signal Runner
+  environment.
 
 ### Daily backend cycle
 
-- Publish refreshed market data through a staging directory and an immutable manifest.
-- Abort before research or signal generation when any required input is partial or stale.
-- Run the Signal Runner with an explicit dataset manifest, universe, and `as_of` date.
-- Advance the simulated account only from a verified committed signal and a complete execution-day snapshot.
-- Produce stage-health evidence for every failure and successful publication.
+- Refreshed market data is staged and published under an immutable Manifest.
+- Partial or stale required inputs fail before research or signal generation.
+- Signal Runner receives an explicit Dataset Manifest, Universe, and `as_of`.
+- Simulated Account advances only from a verified committed signal and a direct
+  successor execution-day Dataset Manifest.
 
 ## Web boundary
 
-The future Web application may render verified Production Signal and simulated-account contracts. It must not train a model, calculate a portfolio, infer fills, or present research reconstruction as a live account.
+The implemented Web application renders only a verified Production Signal and
+the simulated-account state bound to that signal. It does not train a model,
+calculate a portfolio, infer fills, or present Research reconstruction as a
+live account. Static release bytes are hash-bound at build time and verified
+again before the bundled server starts.
 
 ## Acceptance criteria
 
@@ -61,5 +73,8 @@ The future Web application may render verified Production Signal and simulated-a
 
 ## Deferred work
 
-- Rebuild the static Web application after the backend contracts and daily cycle are accepted.
-- Add broker integration only as a separate future system. The current repository makes no claim about real holdings, orders, fills, or execution success.
+- Add broker integration only as a separate future system. The current
+  repository makes no claim about real holdings, orders, fills, or execution
+  success.
+- Build an immutable multi-year minute-bar dataset before evaluating intraday
+  models. The existing one-day local cache is not research evidence.
