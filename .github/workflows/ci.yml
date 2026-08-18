@@ -33,6 +33,43 @@ jobs:
       - run: uv run pytest
       - run: git diff --exit-code
 
+  isolated-packages:
+    name: Isolated package - ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: quant-core
+            install: ./packages/quant_core
+            imports: import ashare_quant_core
+          - name: data-gateway
+            install: ./services/data_gateway
+            imports: import ashare_data_gateway
+          - name: research
+            install: ./packages/quant_core ./apps/research
+            imports: import arch, ashare_research_app, jsonschema, numpy, pandas, scipy, sklearn
+          - name: signal-runner
+            install: ./packages/quant_core ./apps/signal_runner
+            imports: import ashare_signal_runner, jsonschema, numpy, sklearn
+          - name: simulated-account
+            install: ./packages/quant_core ./apps/signal_runner ./apps/sim_account
+            imports: import ashare_quant_core, ashare_signal_runner, ashare_sim_account, jsonschema
+          - name: web
+            install: ./packages/quant_core ./apps/signal_runner ./apps/web
+            imports: import ashare_signal_runner, ashare_web, jsonschema
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - run: uv venv .isolated
+      - run: uv pip install --python .isolated/bin/python ${{ matrix.install }}
+      - run: .isolated/bin/python -c '${{ matrix.imports }}'
+      - run: uv pip check --python .isolated/bin/python
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
