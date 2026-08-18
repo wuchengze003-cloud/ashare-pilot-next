@@ -1322,45 +1322,22 @@ body {{ animation:fadeUp .5s ease both; }}
 
 
 def render_acceptance(data: dict) -> str:
-    """Acceptance report page: check the model against frank-quant EP004 standards."""
+    """Render research diagnostics without claiming promotion or activation."""
     m = data.get("metrics", {})
     seg = data.get("segments", {})
 
     checks = [
-        ("目标函数（验证集打分 + 惩罚训练/验证落差）",
-         "frank-quant: -(valid_sharpe − 0.5×max(0, train−valid))",
-         "已实测·不适用（滚动晋级跨时期分数不可比）", "warn"),
-        ("夏普口径（日资金曲线）",
-         "frank-quant: 每日盈亏汇总 ÷ 初始资金，非每笔交易夏普",
-         "✅ 已实现（nav.pct_change 日收益年化）", "pass"),
-        ("最少交易限制（防超低频刷夏普）",
-         "frank-quant: MIN_TRADES=30 / MIN_VALID_TRADES=50",
-         "已实测·不适用（日频慢换手模型非超低频策略）", "warn"),
-        ("三段划分 + 物理隔离",
-         "frank-quant: TRAIN/VALID/TEST，TEST 进程不可达",
-         "⚠️ 事后切分，但滚动训练严格样本外", "warn"),
-        ("未来函数防护",
-         "frank-quant: 全量 vs 截断信号对照",
-         "✅ 严格样本外（滚动窗口，资金流/融资 shift(1)）", "pass"),
-        ("Deflated Sharpe（搜索次数修正）",
-         "frank-quant: 按搜索次数 N 修正运气上限",
-         "✅ 已实现（8 真实 trials，运气上限 1.43，DSR=0.975）", "pass"),
-        ("换手控制",
-         "frank-quant: exit_buffer + min_hold + max_open_trades",
-         "✅ 满仓上限 + 最短持有 + 缓冲带", "pass"),
-        ("现金账户（模拟真实资金约束）",
-         "frank-quant: dry_run_wallet",
-         "✅ 已实现（100万现金账户 + 涨跌停 + 市值分档滑点）", "pass"),
+        ("标签成熟边界", "标签结束日不晚于重训日", "模型卡记录训练边界", "pass"),
+        ("验证集隔离", "验证日期严格晚于训练日期", "滚动验证不参与拟合", "pass"),
+        ("研究与模拟账户隔离", "研究报告不得充当持仓账本", "模拟账户使用独立合同", "pass"),
+        ("统计诊断", "数值由可复放输入计算", "本页不声明正式晋级", "warn"),
     ]
     rows = "".join(
         f'<tr class="row-{c[3]}"><td class="check-name">{c[0]}</td>'
         f'<td class="std">{c[1]}</td><td class="status">{c[2]}</td></tr>'
         for c in checks
     )
-    n_pass = sum(1 for c in checks if c[3] == "pass")
-    n_fail = sum(1 for c in checks if c[3] == "fail")
-    verdict = "通过验收（防过拟合核心机制已达标）" if n_fail == 0 else "未完全通过验收"
-    verdict_color = "#3fb950" if n_fail == 0 else "#f85149"
+    verdict_color = "#d29922"
 
     def pct(v):
         return f"{v:+.1%}" if isinstance(v, (int, float)) else "—"
@@ -1370,7 +1347,7 @@ def render_acceptance(data: dict) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>模型验收报告 · 阿醒的 AI 策略 0813</title>
+<title>研究诊断报告</title>
 <style>
 :root {{ --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3; --muted:#8b949e; --red:#f85149; --accent:#3fb950; --amber:#d29922; --blue:#58a6ff; }}
 * {{ box-sizing:border-box; margin:0; padding:0; }}
@@ -1400,10 +1377,10 @@ td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }}
 <body>
 <div class="container">
 <a class="back" href="index.html">← 返回模拟仓</a>
-<h1>模型验收报告 · {_strategy_title(data)}</h1>
+<h1>研究诊断报告 · {_strategy_title(data)}</h1>
 <div style="color:var(--muted);font-size:13px;margin-top:4px">{_model_note(data)}</div>
 
-<div class="verdict" style="margin-top:16px;color:{verdict_color}">结论：{verdict}（通过 {n_pass} 项 / 已实测·判定不适用 2 项 / 部分达标 1 项）</div>
+<div class="verdict" style="margin-top:16px;color:{verdict_color}">研究结果，未执行正式晋级；不能代表生产激活或真实持仓。</div>
 
 <div class="cards">
   <div class="card"><div class="card-label">全期年化</div><div class="card-value" style="color:{'#f85149' if m.get('annual_return',0)>=0 else '#3fb950'}">{pct(m.get('annual_return'))}</div></div>
@@ -1411,8 +1388,8 @@ td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }}
   <div class="card"><div class="card-label">最大回撤</div><div class="card-value" style="color:#3fb950">{pct(m.get('max_drawdown'))}</div></div>
 </div>
 
-<h2>验收对照（frank-quant EP004 标准）</h2>
-<table><thead><tr><th>验收项</th><th>frank-quant 标准</th><th>当前实现</th></tr></thead>
+<h2>研究边界检查</h2>
+<table><thead><tr><th>检查项</th><th>约束</th><th>当前实现</th></tr></thead>
 <tbody>{rows}</tbody></table>
 
 <h2>三段表现</h2>
@@ -1423,7 +1400,7 @@ td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }}
 </div>
 
 <div class="note">
-<strong>对抗性审查结论（为什么 2 项「不适用」）</strong>：① frank-quant 的「滚动晋级门槛」（验证集打分 + 训练/验证落差惩罚）经实测<strong>不适用</strong>——在滚动重训场景下，新旧模型的验证集分属不同时期，IC 水平随市场 regime 漂移，跨时期分数不可比，导致模型几乎不晋级（实测 n_promotions=1）、长期用过时模型，回测反而从 +61% 崩到 -7%。② 「最少交易限制」同样不适用——本模型是日频选股、慢换手，不是"全年只交易一次刷夏普"的超低频策略，无需该门槛。③ 因此防过拟合采用 frank-quant 真正的杀手锏：严格样本外滚动训练 + 三段隔离 + DSR 运气修正（8 个真实 trials，运气上限 1.43 vs 实测夏普 2.44，DSR=0.975 显著）+ MC bootstrap（5000 次分块重采样，100% 盈利）。
+历史研究曲线和统计诊断不能替代 Promotion Gate。模拟账户只接受经过校验并提交的 Production Signal，不读取本页数据。
 </div>
 </div>
 </body>

@@ -9,6 +9,10 @@ The first version publishes target positions only. It does not connect to a
 broker, does not own real holdings, and never emits a "filled" conclusion. Web
 must keep targets, user confirmation, and real fills distinct.
 
+A separate simulated account may persist deterministic simulated trades and
+holdings when every artifact is explicitly labeled as simulated. It is not a
+broker adapter and cannot be used as evidence of real execution.
+
 State priority and transitions are in
 [`../STATE_MACHINE.md`](../STATE_MACHINE.md).
 
@@ -16,7 +20,8 @@ State priority and transitions are in
 
 - Signal Runner outputs target weights and reasons, not broker order status.
 - The system does not handle partial fills, cancellations, or next-day
-  continuation sells.
+  continuation sells from a broker.
+- Simulated fills and holdings live only under the Simulated Account contracts.
 - Future automated trading must use a separate `execution_adapter` contract.
 - Until an execution adapter is connected, no artifact may contain `filled`,
   `executed`, or equivalent claims.

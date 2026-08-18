@@ -39,7 +39,9 @@ def prepare_panel(
     market's absolute move). Returns ``(prepared, feature_cols)``.
     """
     result = panel.sort_values(["symbol", "trade_date"]).copy()
-    result["_fwd_close"] = result.groupby("symbol")["close"].shift(-label_horizon)
+    grouped = result.groupby("symbol", sort=False)
+    result["_label_end_date"] = grouped["trade_date"].shift(-label_horizon)
+    result["_fwd_close"] = grouped["close"].shift(-label_horizon)
     result["_fwd_ret"] = result["_fwd_close"] / result["close"] - 1.0
     result["_label"] = result.groupby("trade_date")["_fwd_ret"].transform(
         lambda s: s - s.mean()
@@ -53,7 +55,9 @@ def prepare_panel(
         )
         feature_cols.append(col)
 
-    result = result.dropna(subset=feature_cols + ["_label"])
+    # Keep recent feature rows even though their forward labels have not matured.
+    # They may be scored, but rolling_fit excludes them from model fitting.
+    result = result.dropna(subset=feature_cols)
     return result, feature_cols
 
 
@@ -82,26 +86,39 @@ def rolling_fit(
 ) -> RollingFit:
     """Walk-forward fit/predict: refit every ``refit_every`` days on the
     trailing ``window`` days, predict the following days out-of-sample."""
-    dates = sorted(prepared["trade_date"].unique())
+    required = {"trade_date", "_label", "_label_end_date", *feature_cols}
+    missing = sorted(required - set(prepared.columns))
+    if missing:
+        raise ValueError("prepared panel is missing: " + ", ".join(missing))
+    dates = [pd.Timestamp(day) for day in sorted(prepared["trade_date"].unique())]
     predictions: dict[pd.Timestamp, np.ndarray] = {}
     weights: dict[pd.Timestamp, dict[str, float]] = {}
 
-    for i in range(window, len(dates), refit_every):
-        train = prepared[
-            (prepared["trade_date"] >= dates[i - window])
-            & (prepared["trade_date"] <= dates[i])
+    last_refit_index: int | None = None
+    for index, current in enumerate(dates):
+        mature = prepared[
+            prepared["_label"].notna()
+            & prepared["_label_end_date"].notna()
+            & (prepared["_label_end_date"] <= current)
         ]
+        mature_dates = [pd.Timestamp(day) for day in sorted(mature["trade_date"].unique())]
+        if len(mature_dates) < window:
+            continue
+        if last_refit_index is not None and index - last_refit_index < refit_every:
+            continue
+        train_dates = mature_dates[-window:]
+        train = mature[mature["trade_date"].isin(train_dates)]
         estimator = _make_model(model)
         estimator.fit(train[feature_cols].to_numpy(), train["_label"].to_numpy())
         if model == "ridge":
-            weights[dates[i]] = {
+            weights[current] = {
                 col.removesuffix("_z"): float(w)
                 for col, w in zip(feature_cols, estimator.coef_, strict=True)
             }
-        for j in range(i + 1, min(i + refit_every, len(dates))):
-            day = dates[j]
+        for day in dates[index : min(index + refit_every, len(dates))]:
             day_frame = prepared[prepared["trade_date"] == day]
             predictions[day] = estimator.predict(day_frame[feature_cols].to_numpy())
+        last_refit_index = index
 
     return RollingFit(predictions=predictions, weights=weights or None)
 

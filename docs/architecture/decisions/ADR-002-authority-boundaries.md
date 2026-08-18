@@ -16,6 +16,8 @@
 4. `apps/web/` consumes versioned artifacts only.
 5. `services/data_gateway/` only provides data artifacts and online data
    interfaces.
+6. `apps/sim_account/` consumes committed Production Signals and imports all
+   execution and portfolio semantics from `quant_core`; it never imports Research.
 
 ## Rationale
 
@@ -29,4 +31,5 @@ of trading rules.
 - Research copies production inference logic.
 - Signal Runner imports experiment, parameter-search, or promotion modules.
 - Web recomputes strategy, state, or positions.
+- Simulated Account imports models or recomputes target positions.
 - Data Gateway decides strategies or positions from data content.

@@ -1,0 +1,21 @@
+[project]
+name = "ashare-sim-account"
+version = "0.1.0"
+description = "Forward-only simulated A-share account driven by committed production signals"
+requires-python = ">=3.11"
+dependencies = [
+  "ashare-quant-core",
+  "ashare-signal-runner",
+  "jsonschema[format]>=4.25,<5"
+]
+
+[project.scripts]
+ashare-sim-account = "ashare_sim_account.cli:main"
+
+[tool.uv.sources]
+ashare-quant-core = {workspace = true}
+ashare-signal-runner = {workspace = true}
+
+[build-system]
+requires = ["uv_build>=0.10.8,<0.11.0"]
+build-backend = "uv_build"

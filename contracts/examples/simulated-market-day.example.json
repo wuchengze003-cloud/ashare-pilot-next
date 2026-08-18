@@ -1,0 +1,17 @@
+{
+  "contract_id": "simulated-market-day",
+  "schema_version": "1.0.0",
+  "execution_date": "2026-08-18",
+  "previous_trade_date": "2026-08-17",
+  "dataset_id": "dataset-sim-2026-08-18",
+  "dataset_snapshot_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "session_complete": true,
+  "bars": [
+    {"symbol": "000001.SZ", "open": 12.1, "close": 12.25},
+    {"symbol": "600000.SH", "open": 10.2, "close": 10.15}
+  ],
+  "previous_closes": [
+    {"symbol": "000001.SZ", "close": 12.0},
+    {"symbol": "600000.SH", "close": 10.0}
+  ]
+}

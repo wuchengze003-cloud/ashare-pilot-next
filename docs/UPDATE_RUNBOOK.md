@@ -1,103 +1,60 @@
-# Update Runbook — how to refresh the dashboard
+# 后端更新说明
 
-This document is the single entry point for any agent (or human) that needs to
-refresh the A-share research dashboard. Read it top-to-bottom once and you can
-run the full update chain without prior project context.
+## 正式后端顺序
 
-## 1. What this system is
-
-A daily-quant research dashboard. The pipeline is:
-
-```
-raw data (tushare proxy)  ->  retrain rolling model  ->  per-stock research  ->  static HTML
+```text
+Data Gateway 发布不可变数据集
+  -> Research 使用已成熟标签训练与评价
+  -> 人工审核并激活 Champion
+  -> Signal Runner 提交 Production Signal
+  -> Sim Account 在下一交易日开盘推进模拟账户
 ```
 
-- Signals are generated **after the close** of day T, executed at the **open of
-  day T+1**. No look-ahead, no same-day-close fills.
-- The web layer is **read-only static HTML**. It never contains strategy,
-  backtest, or order logic.
+日常更新不应自动晋级或激活新模型。研究重跑可以生成新的历史分析，但不能改写已提交信号和模拟仓账本。
 
-## 2. Where the data lives (`runtime/`)
+## 滚动训练
 
-| Path | What |
-|---|---|
-| `runtime/full-market/` | Per-stock daily bars (OHLCV) |
-| `runtime/alt-data/` | Alt datasets: `daily_basic` (valuation), `moneyflow`, `top_list`/`top_inst` (dragon-tiger), `hsgt_top10` (north-bound), `margin_detail` (margin), `cyq_perf` (chip), `stk_holdernumber` (shareholders) |
-| `runtime/index/` | Benchmark index (SSE) |
-| `runtime/sw_industry.json` | Shenwan L1 industry map |
-| `runtime/stock-profiles/` | Per-stock research cards (`{code}.json`) + connector snapshots (`{code}_extended.json`) |
-| `runtime/dashboard/` | `champion.json` (the single source of truth the renderer reads) + generated HTML |
-| `runtime/panel_cache.pkl` | Wide panel cache (factors) |
+- 默认标签期限为 60 个交易日。
+- 每条样本包含 `trade_date` 和 `label_end_date`。
+- 在 `refit_date` 训练时，只使用 `label_end_date <= refit_date` 的样本。
+- 评价模型只用训练段拟合，在未见验证段上评分。
+- 生产预测模型可以使用同一截止日下的全部已成熟样本，但不参与历史绩效评价。
 
-All of `runtime/` is git-ignored. Never edit it by hand except through the
-scripts below.
+## 模拟仓更新
 
-## 3. The three update tiers
+模拟仓需要：
 
-Run from the repo root, via the project venv:
+1. Signal Runner 的已提交信号目录和当前指针。
+2. 覆盖下一交易日的不可变 Dataset Manifest、数据目录和上一交易日。
+3. 费用、市场规则和执行策略合同。
+4. 显式的账户 ID、初始资金、执行日和生成时间。
+
+命令示例见项目 [README](../README.md#模拟仓命令)。
+
+每次成功推进后会生成：
+
+```text
+runtime/<pilot-root>/sim-accounts/<account-id>/
+  current-state.json
+  runs/<state-id>/state.json
+  runs/<state-id>/COMMITTED
+```
+
+`current-state.json` 只在新状态完整写入后原子切换。
+
+## 过渡期静态看板
+
+`tools/update.py intraday|full|render` 仍用于现有静态页面，但它不会推进新模拟仓。其 `champion.json` 中的“当前持仓”是研究重放结果，不是持久模拟账户。
+
+Web 迁移完成前，不应把过渡看板当成新模拟仓的权威界面。
+
+## 校验
 
 ```bash
-# A) Intraday quick refresh — ~1 min, NO retrain
-#    Refreshes current holdings' latest close + rerenders. Safe to run any time.
-uv run python tools/update.py intraday
-
-# B) End-of-day full update — ~8 min, retrains the model
-#    Collects alt data -> retrains rolling model -> regenerates research cards -> renders.
-uv run python tools/update.py full
-
-# C) Render only — seconds
-#    Rerenders HTML from the existing champion.json + stock-profiles. No fetch, no retrain.
-uv run python tools/update.py render
+uv sync --locked --all-packages --dev
+uv run ruff check .
+uv run pytest
+uv run python tools/validate_contracts.py
+uv run python tools/check_boundaries.py
+uv run python tools/check_language.py
 ```
-
-### What each tier does / does not do
-
-| Tier | Fetch data | Retrain model | Regenerate signals | Rerender |
-|---|---|---|---|---|
-| `intraday` | latest close for holdings only | ❌ | ❌ | ✅ |
-| `full` | ✅ (alt data up to latest trade date) | ✅ | ✅ | ✅ |
-| `render` | ❌ | ❌ | ❌ | ✅ |
-
-## 4. The underlying scripts (if you need finer control)
-
-| Script | Purpose |
-|---|---|
-| `tools/fetch_market_data.py` | Single-stock fetch (`daily`, `mins`, `daily_basic`) |
-| `tools/collect_alt_data.py` | Bulk alt-data collector (breakpoint-resume). `ALT_END_DATE` env var overrides the end date |
-| `apps/research/src/ashare_research_app/champion.py` | `python -m ashare_research_app.champion` — retrain + backtest + emit `champion.json` |
-| `apps/research/src/ashare_research_app/stock_profile.py` | `python -m ashare_research_app.stock_profile .` — per-stock research cards |
-| `tools/fetch_stock_news.py` | Keyless Eastmoney news search; fills the `news` field in each `*_extended.json` |
-| `tools/render_dashboard.py` | Renders `index.html` + `acceptance.html` + model pages + detail pages |
-
-## 5. Connector snapshots (concepts / consensus / chip / news / rating)
-
-The per-stock research card combines two kinds of extra data:
-
-1. **Keyless script (news)** — `tools/fetch_stock_news.py` calls the public
-   Eastmoney search endpoint directly. No MCP, no WorkBuddy credits, no API
-   key. `tools/update.py full` runs it automatically after the research cards.
-2. **MCP connector snapshots (concepts / consensus / chip / rating)** — these
-   still come from 通达信 tdx and 腾讯自选股 westock and are collected
-   in-session by an agent into `runtime/stock-profiles/{code}_extended.json`.
-
-Connector snapshot facts:
-
-- `tdx_api_data` concept boards: keep only rows with `配置分类 == 2` (real
-  concepts); drop `配置分类 == 4` (dynamic tags like 大盘股/业绩预升/通达信热股).
-- `data_chip` accepts comma-separated `codes` for bulk fetch.
-- `data_consensus` returns empty for small caps without analyst coverage.
-- The old `mx_finance_search_news` dependency is removed; news now uses
-  `tools/fetch_stock_news.py`.
-
-## 6. Gotchas / boundaries
-
-- **Never** hand-edit `champion.json` to change metrics; regenerate via `champion.py`.
-- The rolling model uses a hybrid label (label60 history + label20 tail). Tail
-  models let the refit reach the latest bar; do not "fix" this back to a single
-  horizon without re-running the tail-label sweep.
-- `glob("*.json")` on `stock-profiles/` must skip `*_extended.json` (they share
-  a code key with the base card and will overwrite it).
-- Intraday price is the latest **daily close**, not a live tick; for true
-  intraday quotes use the tdx/westock connectors in-session.
-- Tushare calls are rate-limited by `DataApi` (>=0.2s) and retried; keep it that
-  way. The project uses `urllib`, not `requests`.

@@ -14,6 +14,7 @@ members = [
     "ashare-quant-core",
     "ashare-research-app",
     "ashare-signal-runner",
+    "ashare-sim-account",
 ]
 
 [[package]]
@@ -97,6 +98,23 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "ashare-quant-core", editable = "packages/quant_core" },
+    { name = "jsonschema", extras = ["format"], specifier = ">=4.25,<5" },
+]
+
+[[package]]
+name = "ashare-sim-account"
+version = "0.1.0"
+source = { editable = "apps/sim_account" }
+dependencies = [
+    { name = "ashare-quant-core" },
+    { name = "ashare-signal-runner" },
+    { name = "jsonschema", extra = ["format"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ashare-quant-core", editable = "packages/quant_core" },
+    { name = "ashare-signal-runner", editable = "apps/signal_runner" },
     { name = "jsonschema", extras = ["format"], specifier = ">=4.25,<5" },
 ]
 

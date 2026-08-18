@@ -1,12 +1,13 @@
 """Machine-check the repository language policy.
 
 Policy enforced here:
-- README.md and docs/architecture/**/*.md contain no CJK characters.
+- README.md may be Chinese; docs/architecture/**/*.md remain English.
 - Comments and docstrings in Python/JS/TS/Shell files under apps/, packages/,
   services/, tools/, and ops/ are English.
 - CJK string literals are allowed only in the user-facing UI/output strings
   enumerated below:
   * tools/*.py (dashboard HTML and CLI output),
+  * tools/dashboard_assets/* user-facing static assets,
   * test files under */tests/ (Chinese stock names in fixture data),
   * champion.py FEATURE_LABELS and KEY_FEATURES display-label assignments,
   * apps/web/static/*.html user-facing HTML.
@@ -137,7 +138,7 @@ def _walk_plain_code(path: Path, violations: list[str], root: Path = ROOT) -> No
 def check_language(root: Path = ROOT) -> list[str]:
     """Return every language-policy violation under ``root``."""
     violations: list[str] = []
-    doc_roots = (root / "README.md", root / "docs" / "architecture")
+    doc_roots = (root / "docs" / "architecture",)
 
     for doc_root in doc_roots:
         if doc_root.is_file():
@@ -162,6 +163,8 @@ def check_language(root: Path = ROOT) -> list[str]:
             suffix = path.suffix.lower()
             if suffix in PY_SUFFIXES:
                 _walk_python(path, violations, root)
+            elif path.is_relative_to(root / "tools" / "dashboard_assets"):
+                continue
             elif suffix in JS_SUFFIXES:
                 _walk_plain_code(path, violations, root)
             elif suffix in HTML_SUFFIXES and path.is_relative_to(root / "apps/web/static"):

@@ -28,6 +28,8 @@ flowchart LR
   research --> champion["Immutable Champion"]
   champion --> runner
   runner --> signal["Production Signal + Runtime Manifest"]
+  signal --> sim["Forward-only Simulated Account"]
+  core --> sim
   signal --> web["Read-only Web"]
   ops["Ops"] -.orchestration and validation.-> gateway
   ops -.orchestration and validation.-> research
@@ -37,7 +39,8 @@ flowchart LR
 
 Data Gateway does not define strategies. Research does not publish unpromoted
 strategies. Signal Runner does not train. Web does not compute financial
-semantics. Ops does not decide positions.
+semantics. The Simulated Account consumes committed signals and never claims
+broker execution. Ops does not decide positions.
 
 ## Companion Files
 

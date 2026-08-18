@@ -12,8 +12,14 @@ def write(root: Path, relative: str, content: str) -> None:
 
 
 def test_clean_tree_passes(tmp_path: Path) -> None:
-    write(tmp_path, "README.md", "# Project\n")
+    write(tmp_path, "README.md", "# 项目\n")
     write(tmp_path, "tools/demo.py", "VALUE = 1\n")
+
+    assert check_language(tmp_path) == []
+
+
+def test_chinese_readme_is_allowed(tmp_path: Path) -> None:
+    write(tmp_path, "README.md", "# A 股量化研究与模拟仓\n")
 
     assert check_language(tmp_path) == []
 

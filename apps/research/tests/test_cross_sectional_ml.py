@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 from ashare_research_app.cross_sectional_ml import (
@@ -56,11 +57,32 @@ def test_rolling_fit_is_strictly_out_of_sample() -> None:
         panel[f] = panel.groupby("symbol")["close"].pct_change()
     prepared, feats = prepare_panel(panel, factors=["ret_1d"], label_horizon=5)
     fit = rolling_fit(prepared, feats, window=30, refit_every=10, model="ridge")
-    dates = sorted(prepared["trade_date"].unique())
-    # first prediction is strictly after the first refit point (window)
-    refit_points = set(dates[30::10])
-    for day in fit.predictions:
-        assert day not in refit_points
+    assert fit.predictions
+    for refit_date in fit.weights or {}:
+        mature = prepared[
+            prepared["_label"].notna()
+            & (prepared["_label_end_date"] <= refit_date)
+        ]
+        assert mature["trade_date"].nunique() >= 30
+
+
+def test_future_labels_cannot_change_an_existing_rolling_prediction() -> None:
+    panel = _panel(n_symbols=6, n_days=90)
+    panel["ret_1d"] = panel.groupby("symbol")["close"].pct_change()
+    prepared, feats = prepare_panel(panel, factors=["ret_1d"], label_horizon=5)
+    original = rolling_fit(prepared, feats, window=30, refit_every=10, model="ridge")
+    first_refit = min(original.weights or {})
+    first_prediction = min(original.predictions)
+
+    changed = prepared.copy()
+    future = changed["_label_end_date"] > first_refit
+    changed.loc[future, "_label"] = changed.loc[future, "_label"] * -1000.0 + 17.0
+    replay = rolling_fit(changed, feats, window=30, refit_every=10, model="ridge")
+
+    assert np.array_equal(
+        original.predictions[first_prediction],
+        replay.predictions[first_prediction],
+    )
 
 
 def test_ridge_exposes_factor_weights() -> None:

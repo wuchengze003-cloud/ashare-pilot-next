@@ -1,9 +1,8 @@
-"""Independent update system — a low-coupling orchestrator for the dashboard.
+"""Transitional update orchestrator for the legacy static dashboard.
 
-Splits the update chain into three self-documenting tiers so any agent can pick
-it up by reading this file + docs/UPDATE_RUNBOOK.md. This script only calls the
-existing modules (fetch / champion / stock_profile / render); it owns no
-financial semantics and never touches strategy internals.
+The script only calls existing fetch, research, profile, and render modules. It
+does not define financial semantics. The canonical simulated account is updated
+through ``ashare-sim-account`` and is not derived from ``champion.json``.
 
 Usage:
   python tools/update.py intraday   # intraday: refresh prices + rerender (~1 min)
@@ -70,9 +69,15 @@ def intraday() -> None:
         try:
             rows = api.daily(sym, start, end)
             if rows:
-                h["last_close"] = round(float(rows[-1]["close"]), 2)
+                # The proxy returns rows newest-first; do not assume order. Pick
+                # the row with the latest trade_date to avoid writing a stale price.
+                latest = max(rows, key=lambda r: r.get("trade_date", ""))
+                h["last_close"] = round(float(latest["close"]), 2)
                 n_ok += 1
-                print(f"  {sym} {h.get('name')} 现价 -> {h['last_close']}")
+                print(
+                    f"  {sym} {h.get('name')} 现价({latest.get('trade_date')})"
+                    f" -> {h['last_close']}"
+                )
             else:
                 print(f"  {sym} 无行情")
         except Exception as exc:  # noqa: BLE001
@@ -97,7 +102,7 @@ def full() -> None:
     # 3. regenerate per-stock research cards
     _run([sys.executable, "-m", "ashare_research_app.stock_profile", str(ROOT)])
 
-    # 4. refresh keyless news snapshots (no MCP/WorkBuddy dependency)
+    # 4. refresh public news snapshots
     _run([sys.executable, str(ROOT / "tools/fetch_stock_news.py")])
 
     # 5. render all static pages

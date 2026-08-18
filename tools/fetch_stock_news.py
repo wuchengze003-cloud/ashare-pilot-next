@@ -1,9 +1,8 @@
 """Fetch per-stock news from the keyless Eastmoney search API.
 
-This script replaces the mx-ds-mcp connector for the dashboard news block.
 It reads the existing ``*_extended.json`` connector snapshots under
 ``runtime/stock-profiles/`` and fills each ``news`` field from the public
-Eastmoney search endpoint. No MCP, WorkBuddy credits, or API key are used.
+Eastmoney search endpoint. No API key is used.
 
 Usage:
     python tools/fetch_stock_news.py --limit 6
@@ -131,7 +130,7 @@ def update_profile(path: Path, *, limit: int) -> tuple[str, str, int]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Fetch dashboard stock news without MCP.")
+    parser = argparse.ArgumentParser(description="Fetch public dashboard stock news.")
     parser.add_argument("--limit", type=int, default=6, help="news items per stock")
     parser.add_argument("--symbol", action="append", default=None,
                         help="only update this symbol code, repeatable")

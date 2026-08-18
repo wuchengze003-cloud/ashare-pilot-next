@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -36,6 +37,22 @@ BY_DATE_APIS = {
 }
 # By-symbol interfaces: parameter keys are ts_code plus a date range
 BY_TS_APIS = {"cyq_perf", "stk_holdernumber"}
+REQUIRED_NONEMPTY_APIS = {"daily_basic", "moneyflow", "margin_detail"}
+
+
+def _atomic_write(path: Path, document: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def load_symbols() -> list[str]:
@@ -53,20 +70,24 @@ def get_trade_dates(api: DataApi) -> list[str]:
 
 
 def save(subdir: str, key: str, fields: list, items: list) -> bool:
-    """Write compact JSON; skip and return False when a non-empty file exists."""
+    """Write compact JSON; skip and return False when a non-empty file exists.
+
+    Empty results are NOT written to disk: a premature run (data not yet
+    available) must not leave a file that a later run would treat as "done".
+    """
     d = ALT_DIR / subdir
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{key}.json"
     if path.exists() and path.stat().st_size > 0:
         return False
-    path.write_text(
-        json.dumps({"fields": fields, "items": items}, ensure_ascii=False, separators=(",", ":")),
-        encoding="utf-8",
-    )
+    if not items:
+        return False
+    _atomic_write(path, {"fields": fields, "items": items})
     return True
 
 
 def log_fail(api_name: str, params: dict, reason: str) -> None:
+    ALT_DIR.mkdir(parents=True, exist_ok=True)
     with open(FAILED_FILE, "a", encoding="utf-8") as f:
         f.write(f"{api_name} | {json.dumps(params, ensure_ascii=False)} | {reason}\n")
 
@@ -89,6 +110,11 @@ def fetch_by_date(api: DataApi, api_name: str, dates: list[str]) -> tuple[int, i
                     data = r.get("data", {})
                     fields = data.get("fields", [])
                     items = data.get("items", [])
+                    if api_name in REQUIRED_NONEMPTY_APIS and not items:
+                        log_fail(api_name, params, "empty required response")
+                        failed += 1
+                        done = True
+                        break
                     save(subdir, d, fields, items)
                     total_rows += len(items)
                     done = True
@@ -151,7 +177,7 @@ def fetch_by_ts(api: DataApi, api_name: str, symbols: list[str]) -> tuple[int, i
     return total_rows, failed
 
 
-def main() -> None:
+def main() -> int:
     load_env()
     apis = sys.argv[1:]
     if not apis:
@@ -159,7 +185,7 @@ def main() -> None:
     for a in apis:
         if a not in BY_DATE_APIS and a not in BY_TS_APIS:
             print(f"未知接口: {a}", file=sys.stderr)
-            sys.exit(2)
+            return 2
 
     api = DataApi()
     if any(a in BY_DATE_APIS for a in apis):
@@ -187,7 +213,8 @@ def main() -> None:
     print("\n=== 汇总 ===", flush=True)
     for a, s in summary.items():
         print(f"{a}: rows={s['rows']} failed={s['failed']} secs={s['secs']}", flush=True)
+    return 1 if any(item["failed"] for item in summary.values()) else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

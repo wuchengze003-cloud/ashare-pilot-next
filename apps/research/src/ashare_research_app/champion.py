@@ -5,13 +5,13 @@ boosted tree learns from a 27-feature cross-section, retrained every 20 trading
 days on the trailing 120 days, and picks the top-10 names for a human-sized
 concentrated book.
 
-Key properties (all verified during the research race):
+Current research configuration:
     - slow alpha: label horizon 60 days (survives the 2023 bear via timing)
     - concentrated: 10 names, ~10% each, ~1 trade/day (human-executable)
     - realistic fills: next-open + slippage, hold-to-exit (stop/profit/signal)
-    - no look-ahead: moneyflow/margin shifted 1 day; prediction reuses the last
-      trained model on the full panel's latest bar (prediction needs factors
-      only, not future labels)
+    - point-in-time inputs: delayed fields use their availability dates
+    - mature-label rolling fit: every refit excludes labels ending after the
+      refit date, while the latest feature row can still be scored
 """
 from __future__ import annotations
 
@@ -39,11 +39,12 @@ FEATURES = [
     "margin_chg_prev", "winner_rate", "holder_chg",
 ]
 
-# Frozen champion configuration (from the parallel race, 2026-08-16).
-# label60 beats label40/80; top10 has the best Sharpe (2.44) & smallest MDD
-# (-14.7%) in the concentrated range, both human-executable (<=10 names).
+# Research configuration. Any production activation still requires a separate,
+# immutable evaluation and promotion decision.
 LABEL_HORIZON = 60
-TAIL_LABEL = 20  # tail transition model's horizon (last ~60 days); probed 2026-08-16
+# Kept as an independently evaluated research horizon. It must never be spliced
+# into the 60-day model's recent history merely to fill unavailable labels.
+TAIL_LABEL = 20
 WINDOW = 120
 REFIT_EVERY = 20
 TOP_K = 10
@@ -97,6 +98,7 @@ class Fit:
     predictions: dict[pd.Timestamp, tuple[np.ndarray, np.ndarray]]
     last_model: HistGradientBoostingRegressor | None
     model_evolution: list[dict] = None  # type: ignore[assignment]
+    last_refit_date: pd.Timestamp | None = None
 
 
 def _cross_sectional_ic(seg: pd.DataFrame, model: HistGradientBoostingRegressor,
@@ -159,6 +161,71 @@ def _load_industry(root: Path) -> dict[str, str]:
     if not p.exists():
         return {}
     return {k: str(v) for k, v in json.loads(p.read_text(encoding="utf-8")).items()}
+
+
+def _merge_holder_number_as_of(
+    panel: pd.DataFrame,
+    holder_numbers: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach the latest holder count that was public on each signal date.
+
+    ``end_date`` is the reporting cut-off, not the publication date.  A holder
+    count therefore becomes observable only on ``ann_date``.  Rows without a
+    publication date, or rows claiming publication before their own reporting
+    cut-off, are rejected rather than backfilled from ``end_date``.
+
+    Signals are produced after the signal-date close for next-open execution,
+    so a record published on the signal date is considered observable.  The
+    selected report and announcement dates stay in the panel as audit fields.
+    """
+    required = ("ts_code", "ann_date", "end_date", "holder_num")
+    missing = [field for field in required if field not in holder_numbers.columns]
+    if missing:
+        raise ValueError(
+            "stk_holdernumber is missing point-in-time fields: " + ", ".join(missing)
+        )
+
+    events = holder_numbers[list(required)].rename(columns={"ts_code": "symbol"}).copy()
+    events["ann_date"] = pd.to_datetime(events["ann_date"], errors="coerce")
+    events["end_date"] = pd.to_datetime(events["end_date"], errors="coerce")
+    events["holder_num"] = pd.to_numeric(events["holder_num"], errors="coerce")
+    events = events.dropna(subset=["symbol", "ann_date", "end_date", "holder_num"])
+    events = events[events["ann_date"] >= events["end_date"]]
+    events = (
+        events.sort_values(["symbol", "ann_date", "end_date"])
+        .drop_duplicates(["symbol", "ann_date"], keep="last")
+    )
+
+    parts: list[pd.DataFrame] = []
+    for symbol, group in panel.sort_values(["symbol", "trade_date"]).groupby(
+        "symbol", sort=False
+    ):
+        history = events[events["symbol"] == symbol].sort_values("ann_date")
+        group = group.copy()
+        group["holder_num"] = np.nan
+        group["holder_report_end_date"] = pd.NaT
+        group["holder_ann_date"] = pd.NaT
+        if not history.empty:
+            positions = history["ann_date"].to_numpy().searchsorted(
+                group["trade_date"].to_numpy(), side="right"
+            ) - 1
+            visible = positions >= 0
+            if visible.any():
+                selected = history.iloc[positions[visible]]
+                group.loc[visible, "holder_num"] = selected["holder_num"].to_numpy()
+                group.loc[visible, "holder_report_end_date"] = selected[
+                    "end_date"
+                ].to_numpy()
+                group.loc[visible, "holder_ann_date"] = selected["ann_date"].to_numpy()
+        parts.append(group)
+
+    if not parts:
+        result = panel.copy()
+        result["holder_num"] = np.nan
+        result["holder_report_end_date"] = pd.NaT
+        result["holder_ann_date"] = pd.NaT
+        return result
+    return pd.concat(parts, ignore_index=True)
 
 
 def _load_index(root: Path) -> pd.Series:
@@ -225,24 +292,8 @@ def build_wide_panel(root: Path) -> pd.DataFrame:
     panel = panel.merge(mg[["symbol", "trade_date", "margin_chg"]],
                         on=["symbol", "trade_date"], how="left")
 
-    hd = _load_per_symbol(alt / "stk_holdernumber")[
-        ["ts_code", "end_date", "holder_num"]].rename(
-        columns={"ts_code": "symbol", "end_date": "ann_date"})
-    hd = hd.dropna(subset=["holder_num"]).sort_values(["symbol", "ann_date"]).drop_duplicates(
-        ["symbol", "ann_date"], keep="last")
-    parts = []
-    for sym, grp in panel.sort_values(["symbol", "trade_date"]).groupby("symbol", sort=False):
-        h = hd[hd["symbol"] == sym].sort_values("ann_date")
-        grp = grp.copy()
-        if h.empty:
-            grp["holder_num"] = np.nan
-        else:
-            pos = h["ann_date"].to_numpy().searchsorted(
-                grp["trade_date"].to_numpy(), side="right") - 1
-            vals = h["holder_num"].to_numpy()
-            grp["holder_num"] = np.where(pos >= 0, vals[np.clip(pos, 0, len(vals) - 1)], np.nan)
-        parts.append(grp)
-    panel = pd.concat(parts, ignore_index=True)
+    holder_numbers = _load_per_symbol(alt / "stk_holdernumber")
+    panel = _merge_holder_number_as_of(panel, holder_numbers)
     panel["holder_chg"] = panel.groupby("symbol")["holder_num"].pct_change()
 
     # no look-ahead: moneyflow & margin are post-close / T+1, use yesterday
@@ -275,117 +326,181 @@ def hysteresis(market_ret: pd.Series, ma_window: int = 20, band: float = TIMING_
     return pd.Series(scale, index=nav.index, name="position_scale")
 
 
-def rolling_gbdt(prepared: pd.DataFrame, prepared_tail: pd.DataFrame,
-                 full_panel: pd.DataFrame, feats: list[str],
-                 window: int = WINDOW, refit: int = REFIT_EVERY) -> Fit:
-    """Hybrid rolling GBDT: main model (label60) + tail transition model (label20).
+def _prepare_forward_labels(
+    panel: pd.DataFrame,
+    feats: list[str],
+    *,
+    horizon: int,
+) -> pd.DataFrame:
+    """Create forward labels together with the date on which each label matures."""
+    if horizon < 1:
+        raise ValueError("label horizon must be positive")
+    prepared = panel.sort_values(["symbol", "trade_date"]).copy()
+    grouped = prepared.groupby("symbol", sort=False)
+    prepared["_label_end_date"] = grouped["trade_date"].shift(-horizon)
+    prepared["_fwd"] = grouped["close"].shift(-horizon) / prepared["close"] - 1.0
+    prepared["_label"] = prepared.groupby("trade_date")["_fwd"].transform(
+        lambda values: values - values.mean()
+    )
+    prepared = prepared.dropna(subset=feats + ["_label", "_label_end_date"])
+    prepared = prepared[np.isfinite(prepared[feats].to_numpy()).all(axis=1)]
+    if (prepared["_label_end_date"] <= prepared["trade_date"]).any():
+        raise ValueError("forward label must end after its feature date")
+    return prepared
 
-    First-principles fix for the M25 tail-gap bug: ``LABEL_HORIZON``-day labels
-    do not exist for the most recent ``LABEL_HORIZON`` days, so a single-label
-    rolling model stalls there. The main model (slow alpha) covers history; a
-    tail model trained on a shorter ``TAIL_LABEL`` horizon keeps the rolling
-    system updating all the way to the latest bar.
 
-    Each refit records its observability card (frank-quant style): train/valid
-    split, train IC, valid IC, gap penalty, promotion score, and full 27-factor
-    permutation importance.
+def _new_gbdt() -> HistGradientBoostingRegressor:
+    return HistGradientBoostingRegressor(
+        max_iter=200,
+        learning_rate=0.05,
+        max_depth=5,
+        min_samples_leaf=50,
+        l2_regularization=1.0,
+        random_state=42,
+    )
+
+
+def rolling_gbdt(
+    prepared: pd.DataFrame,
+    full_panel: pd.DataFrame,
+    feats: list[str],
+    *,
+    label_horizon: int = LABEL_HORIZON,
+    window: int = WINDOW,
+    refit: int = REFIT_EVERY,
+) -> Fit:
+    """Leak-free rolling fit using only labels mature on each refit date.
+
+    The evaluation model is fitted on the earlier portion of the window and
+    scored on an unseen validation tail. A separate production model is then
+    fitted on the complete mature-label window and used until the next refit.
     """
-    from bisect import bisect_right
+    required = {"trade_date", "symbol", "_label", "_label_end_date", *feats}
+    missing = sorted(required - set(prepared.columns))
+    if missing:
+        raise ValueError("prepared panel is missing: " + ", ".join(missing))
+    if window < 3:
+        raise ValueError("rolling window must contain at least three dates")
+    if refit < 1:
+        raise ValueError("refit interval must be positive")
 
-    full_dates = sorted(full_panel["trade_date"].unique())
-    full_by_date = {d: g for d, g in full_panel.groupby("trade_date", sort=False)}
-    split_date = full_dates[len(full_dates) - 1 - LABEL_HORIZON]
+    full_dates = [pd.Timestamp(day) for day in sorted(full_panel["trade_date"].unique())]
+    if not full_dates:
+        raise ValueError("full panel contains no trading dates")
+    full_by_date = {
+        pd.Timestamp(day): group for day, group in full_panel.groupby("trade_date", sort=False)
+    }
 
-    dates_long = sorted(prepared["trade_date"].unique())
-    dates_tail = sorted(prepared_tail["trade_date"].unique())
-    main_refit = [dates_long[i] for i in range(window, len(dates_long), refit)
-                  if dates_long[i] <= split_date]
-    tail_refit = [dates_tail[i] for i in range(window, len(dates_tail), refit)
-                  if dates_tail[i] > split_date]
-    all_refit = sorted(set(main_refit + tail_refit))
-    valid_len = refit
+    refit_dates: list[pd.Timestamp] = []
+    last_refit_index: int | None = None
+    for index, current in enumerate(full_dates):
+        mature = prepared[prepared["_label_end_date"] <= current]
+        if mature["trade_date"].nunique() < window:
+            continue
+        if last_refit_index is None or index - last_refit_index >= refit:
+            refit_dates.append(current)
+            last_refit_index = index
+    if not refit_dates:
+        raise ValueError("no refit date has enough mature labels")
 
-    preds: dict[pd.Timestamp, np.ndarray] = {}
-    last_model = None
+    predictions: dict[pd.Timestamp, tuple[np.ndarray, np.ndarray]] = {}
     model_evolution: list[dict] = []
+    last_model: HistGradientBoostingRegressor | None = None
+    validation_days = min(refit, max(1, window // 5))
 
-    def _next(cur):
-        for rd in all_refit:
-            if rd > cur:
-                return rd
-        return full_dates[-1]
+    for index, current in enumerate(refit_dates):
+        mature = prepared[prepared["_label_end_date"] <= current]
+        mature_dates = [pd.Timestamp(day) for day in sorted(mature["trade_date"].unique())]
+        window_dates = mature_dates[-window:]
+        window_rows = mature[mature["trade_date"].isin(window_dates)]
+        evaluation_train_dates = window_dates[:-validation_days]
+        validation_dates = window_dates[-validation_days:]
+        evaluation_train = window_rows[
+            window_rows["trade_date"].isin(evaluation_train_dates)
+        ]
+        validation = window_rows[window_rows["trade_date"].isin(validation_dates)]
 
-    def _train_card(seg, cur, idx):
-        """Fit a model on seg's trailing `window`, record its observability card."""
-        seg_dates = sorted(seg["trade_date"].unique())
-        i = seg_dates.index(cur)
-        tr = seg[(seg["trade_date"] >= seg_dates[i - window])
-                 & (seg["trade_date"] <= seg_dates[i])]
-        m = HistGradientBoostingRegressor(
-            max_iter=200, learning_rate=0.05, max_depth=5,
-            min_samples_leaf=50, l2_regularization=1.0, random_state=42)
-        m.fit(tr[feats].to_numpy(), tr["_label"].to_numpy())
-        tr_dates = sorted(tr["trade_date"].unique())
-        cut = max(1, len(tr_dates) - valid_len)
-        train_part = tr[tr["trade_date"] <= tr_dates[cut - 1]]
-        valid_part = tr[tr["trade_date"] >= tr_dates[cut]]
-        train_ic = _cross_sectional_ic(train_part, m, feats)
-        valid_ic = _cross_sectional_ic(valid_part, m, feats)
+        evaluation_model = _new_gbdt()
+        evaluation_model.fit(
+            evaluation_train[feats].to_numpy(), evaluation_train["_label"].to_numpy()
+        )
+        train_ic = _cross_sectional_ic(evaluation_train, evaluation_model, feats)
+        valid_ic = _cross_sectional_ic(validation, evaluation_model, feats)
         gap = 0.5 * max(0.0, train_ic - valid_ic)
-        imp_part = (train_part.sample(8000, random_state=42)
-                    if len(train_part) > 8000 else train_part)
-        imp = permutation_importance(
-            m, imp_part[feats].to_numpy(), imp_part["_label"].to_numpy(),
-            n_repeats=1, random_state=42)
-        importance = [{"feature": f, "label": FEATURE_LABELS.get(f, f),
-                       "importance": round(float(v), 6)}
-                      for f, v in zip(feats, imp.importances_mean, strict=True)]
-        end = _next(cur)
-        model_evolution.append({
-            "index": idx,
-            "refit_date": str(cur.date()),
-            "start_date": str(cur.date()),
-            "end_date": str(end.date()),
-            "train_start": str(seg_dates[i - window].date()),
-            "train_end": str(tr_dates[cut - 1].date()),
-            "valid_start": str(tr_dates[cut].date()),
-            "valid_end": str(cur.date()),
-            "n_train_days": len(tr_dates) - valid_len,
-            "n_valid_days": valid_len,
-            "train_ic": round(train_ic, 4),
-            "valid_ic": round(valid_ic, 4),
-            "gap_penalty": round(gap, 4),
-            "score": round(valid_ic - gap, 4),
-            "feature_importance": importance,
-        })
-        return m, end
 
-    idx = 0
-    for cur in main_refit:
-        m, end = _train_card(prepared, cur, idx)
-        last_model = m
-        idx += 1
-        lo = bisect_right(full_dates, cur)
-        hi = bisect_right(full_dates, end)
-        for day in full_dates[lo:hi]:
-            dframe = full_by_date[day]
-            dframe = dframe[dframe[feats].notna().all(axis=1)]
-            if len(dframe):
-                preds[day] = (dframe["symbol"].to_numpy(),
-                              m.predict(dframe[feats].to_numpy()))
-    for cur in tail_refit:
-        m, end = _train_card(prepared_tail, cur, idx)
-        last_model = m
-        idx += 1
-        lo = bisect_right(full_dates, cur)
-        hi = bisect_right(full_dates, end)
-        for day in full_dates[lo:hi]:
-            dframe = full_by_date[day]
-            dframe = dframe[dframe[feats].notna().all(axis=1)]
-            if len(dframe):
-                preds[day] = (dframe["symbol"].to_numpy(),
-                              m.predict(dframe[feats].to_numpy()))
-    return Fit(predictions=preds, last_model=last_model, model_evolution=model_evolution)
+        production_model = _new_gbdt()
+        production_model.fit(window_rows[feats].to_numpy(), window_rows["_label"].to_numpy())
+        importance_rows = (
+            window_rows.sample(8000, random_state=42)
+            if len(window_rows) > 8000
+            else window_rows
+        )
+        importance_result = permutation_importance(
+            production_model,
+            importance_rows[feats].to_numpy(),
+            importance_rows["_label"].to_numpy(),
+            n_repeats=1,
+            random_state=42,
+        )
+        importance = [
+            {
+                "feature": feature,
+                "label": FEATURE_LABELS.get(feature, feature),
+                "importance": round(float(value), 6),
+            }
+            for feature, value in zip(feats, importance_result.importances_mean, strict=True)
+        ]
+
+        next_refit = (
+            refit_dates[index + 1] if index + 1 < len(refit_dates) else full_dates[-1]
+        )
+        max_label_end = pd.Timestamp(window_rows["_label_end_date"].max())
+        if max_label_end > current:
+            raise ValueError("training label escaped the refit cutoff")
+        model_evolution.append(
+            {
+                "index": index,
+                "label_horizon": label_horizon,
+                "refit_date": str(current.date()),
+                "start_date": str(current.date()),
+                "end_date": str(next_refit.date()),
+                "train_start": str(evaluation_train_dates[0].date()),
+                "train_end": str(evaluation_train_dates[-1].date()),
+                "valid_start": str(validation_dates[0].date()),
+                "valid_end": str(validation_dates[-1].date()),
+                "production_train_start": str(window_dates[0].date()),
+                "production_train_end": str(window_dates[-1].date()),
+                "max_label_end": str(max_label_end.date()),
+                "n_train_days": len(evaluation_train_dates),
+                "n_valid_days": len(validation_dates),
+                "train_ic": round(train_ic, 4),
+                "valid_ic": round(valid_ic, 4),
+                "gap_penalty": round(gap, 4),
+                "score": round(valid_ic - gap, 4),
+                "feature_importance": importance,
+            }
+        )
+
+        start = full_dates.index(current)
+        stop = full_dates.index(next_refit) if index + 1 < len(refit_dates) else len(full_dates)
+        for day in full_dates[start:stop]:
+            day_frame = full_by_date[day]
+            valid_features = day_frame[feats].notna().all(axis=1)
+            valid_features &= np.isfinite(day_frame[feats].to_numpy()).all(axis=1)
+            day_frame = day_frame[valid_features]
+            if not day_frame.empty:
+                predictions[day] = (
+                    day_frame["symbol"].to_numpy(),
+                    production_model.predict(day_frame[feats].to_numpy()),
+                )
+        last_model = production_model
+
+    return Fit(
+        predictions=predictions,
+        last_model=last_model,
+        model_evolution=model_evolution,
+        last_refit_date=refit_dates[-1],
+    )
 
 
 def backtest(
@@ -521,9 +636,7 @@ def paper_backtest(
     prev_close_p = panel.assign(_pc=pc).pivot_table(
         index="trade_date", columns="symbol", values="_pc")
 
-    # Tiered slippage by float market cap (ten-thousand CNY). Small names really
-    # do cost more to trade; probed 2026-08-16: -1.1pp vs flat 0.15%, worth it
-    # for realism.
+    # Tiered slippage by float market cap (ten-thousand CNY).
     circ_mv = panel.drop_duplicates("symbol").set_index("symbol")["circ_mv"]
 
     def slippage(sym: str) -> float:
@@ -583,7 +696,9 @@ def paper_backtest(
             mv = 0.0
             for _sym, h in holdings.items():
                 _p = c0.get(_sym, np.nan)
-                mv += h["shares"] * (h["cost"] if pd.isna(_p) else _p)
+                if not pd.isna(_p):
+                    h["last_price"] = float(_p)
+                mv += h["shares"] * h["last_price"]
             total_assets = cash + mv
             budget = total_assets / TOP_K
             syms, pred = fit.predictions[sd]
@@ -602,7 +717,12 @@ def paper_backtest(
                 if shares < 100:
                     continue
                 cash -= shares * price * (1 + slippage(sym))
-                holdings[sym] = {"shares": shares, "cost": float(price), "buy_i": i}
+                holdings[sym] = {
+                    "shares": shares,
+                    "cost": float(price),
+                    "last_price": float(price),
+                    "buy_i": i,
+                }
                 trades.append({"date": str(buy_day.date()), "symbol": sym, "side": "buy",
                                "price": round(float(price), 2), "reason": "signal",
                                "shares": shares})
@@ -612,7 +732,10 @@ def paper_backtest(
         for sym, h in holdings.items():
             p = c.get(sym, np.nan)
             if not pd.isna(p):
-                mv += h["shares"] * p
+                h["last_price"] = float(p)
+            # A suspension freezes valuation at the last observable close. It
+            # does not erase the holding's market value from the account.
+            mv += h["shares"] * h["last_price"]
         navs.append(cash + mv)
     return (pd.Series(navs, index=pd.DatetimeIndex(dates[1:-1]), name="nav"),
             trades)
@@ -661,21 +784,16 @@ def _segment(nav: pd.Series, t0: str, t1: str) -> dict:
 def generate(root: Path) -> dict:
     """Run the champion and return everything the dashboard needs."""
     panel = build_wide_panel(root)
-
-    def _make_prepared(horizon: int) -> pd.DataFrame:
-        p = panel.copy()
-        p["_fwd"] = p.groupby("symbol")["close"].shift(-horizon) / p["close"] - 1.0
-        p["_label"] = p.groupby("trade_date")["_fwd"].transform(lambda s: s - s.mean())
-        p = p.dropna(subset=FEATURES + ["_label"])
-        p = p[np.isfinite(p[FEATURES].to_numpy()).all(axis=1)]
-        return p
-
-    prepared = _make_prepared(LABEL_HORIZON)
-    prepared_tail = _make_prepared(TAIL_LABEL)
+    prepared = _prepare_forward_labels(panel, FEATURES, horizon=LABEL_HORIZON)
 
     market_ret = panel.groupby("trade_date")["ret_1d"].mean()
     scale = hysteresis(market_ret)
-    fit = rolling_gbdt(prepared, prepared_tail, panel, FEATURES)
+    fit = rolling_gbdt(
+        prepared,
+        panel,
+        FEATURES,
+        label_horizon=LABEL_HORIZON,
+    )
 
     # research backtest (equal-weight full-invested) — for model evaluation only
     research_nav, research_turnover, _research_trades = backtest(panel, fit, scale)
@@ -743,23 +861,10 @@ def generate(root: Path) -> dict:
                 "attribution": attribution,
             })
 
-    # feature importance (permutation, on the last trained model — the tail
-    # transition model, so score it against the tail's own labels)
-    feature_importance: list[dict] = []
-    if fit.last_model is not None:
-        imp_panel = prepared_tail[prepared_tail["trade_date"].isin(
-            sorted(prepared_tail["trade_date"].unique())[-WINDOW:])]
-        if len(imp_panel) > 20000:
-            imp_panel = imp_panel.sample(20000, random_state=42)
-        imp = permutation_importance(
-            fit.last_model, imp_panel[FEATURES].to_numpy(), imp_panel["_label"].to_numpy(),
-            n_repeats=3, random_state=42)
-        feature_importance = [
-            {"feature": f, "label": FEATURE_LABELS.get(f, f),
-             "importance": round(float(v), 6)}
-            for f, v in sorted(zip(FEATURES, imp.importances_mean, strict=True),
-                               key=lambda x: -x[1])
-        ]
+    feature_importance = sorted(
+        (fit.model_evolution or [{}])[-1].get("feature_importance", []),
+        key=lambda item: -float(item["importance"]),
+    )
 
     daily = nav.pct_change(fill_method=None).dropna()
     yearly = []
@@ -780,24 +885,19 @@ def generate(root: Path) -> dict:
         for k, v in sorted(reason_counts.items(), key=lambda x: -x[1])
     ]
 
-    # rolling-refit timestamps + factor IC timeline (from model_evolution, so
-    # they cover BOTH the main and tail models and extend to the latest bar —
-    # the tail-gap fix also un-stalls this timeline, which used to stop at the
-    # last label60 day).
+    # Rolling-refit timestamps + factor IC timeline. Every diagnostic uses the
+    # same mature-label cutoff as the model fitted on that date.
     refit_dates = [me["refit_date"] for me in (fit.model_evolution or [])]
-    long_last = sorted(prepared["trade_date"].unique())[-1]
     factor_ic_timeline = []
     for me in (fit.model_evolution or []):
         cur = pd.Timestamp(me["refit_date"])
-        seg = prepared if cur <= long_last else prepared_tail
-        seg_dates = sorted(seg["trade_date"].unique())
-        i = seg_dates.index(cur)
-        tr = seg[(seg["trade_date"] >= seg_dates[i - WINDOW])
-                 & (seg["trade_date"] <= seg_dates[i])]
+        mature = prepared[prepared["_label_end_date"] <= cur]
+        mature_dates = sorted(mature["trade_date"].unique())[-WINDOW:]
+        training_rows = mature[mature["trade_date"].isin(mature_dates)]
         ics = []
         for f in FEATURES:
-            f_rank = tr.groupby("trade_date", sort=False)[f].rank()
-            label_rank = tr.groupby("trade_date", sort=False)["_label"].rank()
+            f_rank = training_rows.groupby("trade_date", sort=False)[f].rank()
+            label_rank = training_rows.groupby("trade_date", sort=False)["_label"].rank()
             ic = f_rank.corr(label_rank)
             ics.append({
                 "feature": f,
@@ -898,11 +998,13 @@ def generate(root: Path) -> dict:
     return {
         "generated_at": str(latest_date.date()),
         "signal_date": str(latest_date.date()),
-        "strategy": "ashare-ai-strategy-0813-sim",
-        "model_note": "deepseek-v4-pro",
+        "strategy": "ashare-rolling-gbdt-research-v2",
+        "model_note": "mature-label rolling GBDT",
+        "history_mode": "research_reconstruction",
         "config": {
             "top_k": TOP_K,
             "label_horizon": LABEL_HORIZON,
+            "research_candidate_horizons": [TAIL_LABEL],
             "min_hold": MIN_HOLD,
             "max_buy": MAX_BUY,
             "max_sell": MAX_SELL,

@@ -20,6 +20,9 @@ semantics, failure behavior, and golden examples.
 | Signal Head | Signal Runner | Signal Runner, Web, Ops | Do not switch the current production signal |
 | Runtime Manifest | Signal Runner/Ops | Web, audit | Do not publish |
 | Stage Health | Each stage | Ops, Web operations | Block downstream stages |
+| Simulated Market Day | Data Gateway/Ops | Simulated Account | Account state does not advance |
+| Simulated Account State | Simulated Account | Simulated Account, future Web | Keep the previous committed state |
+| Simulated Account Head | Simulated Account | Simulated Account, future Web | Do not switch the current state |
 
 ## Dataset Manifest 2.0
 
@@ -97,7 +100,22 @@ semantics, failure behavior, and golden examples.
 - A failure after the run directory commits but before the head switch leaves an
   unactivated complete directory; retrying with the same immutable artifacts
   recovers. A disk-confirmation failure after the head switch may also retry
-  idempotently.
+idempotently.
+
+## Simulated Account 1.0
+
+- A Simulated Market Day binds one complete execution session to one immutable
+  Dataset Snapshot and records the exact previous trading date used for limits
+  and sizing.
+- The account consumes only a verified committed Production Signal and advances
+  one signal sequence at a time. Replay, skipped sequences, and date rollback
+  fail closed.
+- All fills are explicitly simulated by `quant_core`; artifacts never claim
+  broker orders, broker fills, or real holdings.
+- Each immutable state binds the source signal, market day, cost model, market
+  rules, execution policy, and previous account state by canonical SHA-256.
+- Runs are committed before the account head advances atomically. Model retraining
+  cannot rewrite an earlier state or trade.
 
 ## Cost Model 2.0
 
