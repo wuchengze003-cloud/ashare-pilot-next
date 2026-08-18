@@ -15,7 +15,7 @@ def _panel(*dates: str) -> pd.DataFrame:
 
 
 def test_holder_count_is_not_visible_before_announcement_date() -> None:
-    panel = _panel("2024-07-01", "2024-08-27", "2024-08-28")
+    panel = _panel("2024-07-01", "2024-08-27", "2024-08-28", "2024-08-29")
     holder_numbers = pd.DataFrame(
         {
             "ts_code": ["003007.SZ", "003007.SZ"],
@@ -27,13 +27,15 @@ def test_holder_count_is_not_visible_before_announcement_date() -> None:
 
     result = _merge_holder_number_as_of(panel, holder_numbers)
 
-    assert result["holder_num"].tolist() == [17312.0, 17312.0, 15500.0]
+    assert result["holder_num"].tolist() == [17312.0, 17312.0, 17312.0, 15500.0]
     assert result["holder_report_end_date"].dt.strftime("%Y-%m-%d").tolist() == [
+        "2024-03-31",
         "2024-03-31",
         "2024-03-31",
         "2024-06-30",
     ]
     assert result["holder_ann_date"].dt.strftime("%Y-%m-%d").tolist() == [
+        "2024-04-26",
         "2024-04-26",
         "2024-04-26",
         "2024-08-28",
@@ -58,7 +60,7 @@ def test_holder_count_rejects_missing_or_impossible_announcement_dates() -> None
 
 
 def test_same_day_disclosures_prefer_the_latest_reporting_period() -> None:
-    panel = _panel("2026-04-29")
+    panel = _panel("2026-04-29", "2026-04-30")
     holder_numbers = pd.DataFrame(
         {
             "ts_code": ["003007.SZ", "003007.SZ"],
@@ -70,8 +72,9 @@ def test_same_day_disclosures_prefer_the_latest_reporting_period() -> None:
 
     result = _merge_holder_number_as_of(panel, holder_numbers)
 
-    assert result.iloc[0]["holder_num"] == 16066
-    assert result.iloc[0]["holder_report_end_date"] == pd.Timestamp("2026-03-31")
+    assert pd.isna(result.iloc[0]["holder_num"])
+    assert result.iloc[1]["holder_num"] == 16066
+    assert result.iloc[1]["holder_report_end_date"] == pd.Timestamp("2026-03-31")
 
 
 def test_holder_source_without_announcement_date_fails_closed() -> None:

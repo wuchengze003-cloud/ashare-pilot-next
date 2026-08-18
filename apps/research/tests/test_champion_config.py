@@ -19,7 +19,6 @@ def test_rolling_champion_config_is_frozen() -> None:
     assert champion.STOP_LOSS == 0.06
     assert champion.TAKE_PROFIT == 0.25
     assert champion.TIMING_BAND == 0.03
-    assert champion.COST_PER_SIDE == 0.0015
 
 
 def test_feature_pool_size_is_frozen() -> None:

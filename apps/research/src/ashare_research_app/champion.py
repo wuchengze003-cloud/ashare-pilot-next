@@ -13,14 +13,28 @@ Current research configuration:
     - mature-label rolling fit: every refit excludes labels ending after the
       refit date, while the latest feature row can still be scored
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from ashare_quant_core import (
+    DailyBarView,
+    ExecutionDay,
+    SimulatedPortfolioState,
+    classify_board,
+    execute_buy,
+    execute_sell,
+    mark_to_market,
+    parse_market_rules,
+    settle_t_plus_one,
+)
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.inspection import permutation_importance
 
@@ -32,11 +46,33 @@ TRADING_DAYS = 252
 
 # Wide feature pool (27 features). Data speaks: the tree picks what matters.
 FEATURES = [
-    "ret_1d", "ret_5d", "ret_10d", "ret_20d", "ret_60d", "ret_120d",
-    "ret_60_20", "ma5_20", "ma20_60", "vol_20d", "vol_60d", "high_low",
-    "amt_20d", "vol_avg_20d", "size_log", "pe_ttm", "pb", "ps_ttm", "dv_ttm",
-    "ep", "turnover_rate", "volume_ratio", "main_flow_prev", "lg_net_prev",
-    "margin_chg_prev", "winner_rate", "holder_chg",
+    "ret_1d",
+    "ret_5d",
+    "ret_10d",
+    "ret_20d",
+    "ret_60d",
+    "ret_120d",
+    "ret_60_20",
+    "ma5_20",
+    "ma20_60",
+    "vol_20d",
+    "vol_60d",
+    "high_low",
+    "amt_20d",
+    "vol_avg_20d",
+    "size_log",
+    "pe_ttm",
+    "pb",
+    "ps_ttm",
+    "dv_ttm",
+    "ep",
+    "turnover_rate",
+    "volume_ratio",
+    "main_flow_prev",
+    "lg_net_prev",
+    "margin_chg_prev",
+    "winner_rate",
+    "holder_chg",
 ]
 
 # Research configuration. Any production activation still requires a separate,
@@ -55,8 +91,6 @@ MAX_SELL = 2
 STOP_LOSS = 0.06
 TAKE_PROFIT = 0.25
 TIMING_BAND = 0.03
-COST_PER_SIDE = 0.0015
-
 SEGMENTS = [
     ("train", "2023-01-01", "2024-06-30"),
     ("valid", "2024-07-01", "2025-06-30"),
@@ -65,16 +99,32 @@ SEGMENTS = [
 
 # Human-readable Chinese labels for each feature (shown in the dashboard).
 FEATURE_LABELS = {
-    "ret_1d": "1日涨幅", "ret_5d": "5日涨幅", "ret_10d": "10日涨幅",
-    "ret_20d": "20日涨幅", "ret_60d": "60日涨幅", "ret_120d": "120日涨幅",
-    "ret_60_20": "60/20日动量", "ma5_20": "5/20均线", "ma20_60": "20/60均线",
-    "vol_20d": "20日波动", "vol_60d": "60日波动", "high_low": "日内振幅",
-    "amt_20d": "20日成交额", "vol_avg_20d": "20日量能",
-    "size_log": "市值规模", "pe_ttm": "市盈率", "pb": "市净率",
-    "ps_ttm": "市销率", "dv_ttm": "股息率", "ep": "盈利收益率",
-    "turnover_rate": "换手率", "volume_ratio": "量比",
-    "main_flow_prev": "主力净流入", "lg_net_prev": "大单净额",
-    "margin_chg_prev": "融资环比", "winner_rate": "获利盘比例",
+    "ret_1d": "1日涨幅",
+    "ret_5d": "5日涨幅",
+    "ret_10d": "10日涨幅",
+    "ret_20d": "20日涨幅",
+    "ret_60d": "60日涨幅",
+    "ret_120d": "120日涨幅",
+    "ret_60_20": "60/20日动量",
+    "ma5_20": "5/20均线",
+    "ma20_60": "20/60均线",
+    "vol_20d": "20日波动",
+    "vol_60d": "60日波动",
+    "high_low": "日内振幅",
+    "amt_20d": "20日成交额",
+    "vol_avg_20d": "20日量能",
+    "size_log": "市值规模",
+    "pe_ttm": "市盈率",
+    "pb": "市净率",
+    "ps_ttm": "市销率",
+    "dv_ttm": "股息率",
+    "ep": "盈利收益率",
+    "turnover_rate": "换手率",
+    "volume_ratio": "量比",
+    "main_flow_prev": "主力净流入",
+    "lg_net_prev": "大单净额",
+    "margin_chg_prev": "融资环比",
+    "winner_rate": "获利盘比例",
     "holder_chg": "股东户数环比",
 }
 
@@ -101,8 +151,9 @@ class Fit:
     last_refit_date: pd.Timestamp | None = None
 
 
-def _cross_sectional_ic(seg: pd.DataFrame, model: HistGradientBoostingRegressor,
-                        feats: list[str]) -> float:
+def _cross_sectional_ic(
+    seg: pd.DataFrame, model: HistGradientBoostingRegressor, feats: list[str]
+) -> float:
     """Mean daily cross-sectional IC (Spearman rank corr of model score vs label).
 
     IC measures the model's *ranking* skill per day and is unaffected by trade
@@ -174,16 +225,15 @@ def _merge_holder_number_as_of(
     publication date, or rows claiming publication before their own reporting
     cut-off, are rejected rather than backfilled from ``end_date``.
 
-    Signals are produced after the signal-date close for next-open execution,
-    so a record published on the signal date is considered observable.  The
-    selected report and announcement dates stay in the panel as audit fields.
+    The vendor source has a publication date but no publication timestamp.  To
+    avoid assuming an intraday availability time, a disclosure becomes usable
+    only on the first signal date strictly after ``ann_date``.  The selected
+    report and announcement dates stay in the panel as audit fields.
     """
     required = ("ts_code", "ann_date", "end_date", "holder_num")
     missing = [field for field in required if field not in holder_numbers.columns]
     if missing:
-        raise ValueError(
-            "stk_holdernumber is missing point-in-time fields: " + ", ".join(missing)
-        )
+        raise ValueError("stk_holdernumber is missing point-in-time fields: " + ", ".join(missing))
 
     events = holder_numbers[list(required)].rename(columns={"ts_code": "symbol"}).copy()
     events["ann_date"] = pd.to_datetime(events["ann_date"], errors="coerce")
@@ -191,31 +241,29 @@ def _merge_holder_number_as_of(
     events["holder_num"] = pd.to_numeric(events["holder_num"], errors="coerce")
     events = events.dropna(subset=["symbol", "ann_date", "end_date", "holder_num"])
     events = events[events["ann_date"] >= events["end_date"]]
-    events = (
-        events.sort_values(["symbol", "ann_date", "end_date"])
-        .drop_duplicates(["symbol", "ann_date"], keep="last")
+    events = events.sort_values(["symbol", "ann_date", "end_date"]).drop_duplicates(
+        ["symbol", "ann_date"], keep="last"
     )
 
     parts: list[pd.DataFrame] = []
-    for symbol, group in panel.sort_values(["symbol", "trade_date"]).groupby(
-        "symbol", sort=False
-    ):
+    for symbol, group in panel.sort_values(["symbol", "trade_date"]).groupby("symbol", sort=False):
         history = events[events["symbol"] == symbol].sort_values("ann_date")
         group = group.copy()
         group["holder_num"] = np.nan
         group["holder_report_end_date"] = pd.NaT
         group["holder_ann_date"] = pd.NaT
         if not history.empty:
-            positions = history["ann_date"].to_numpy().searchsorted(
-                group["trade_date"].to_numpy(), side="right"
-            ) - 1
+            positions = (
+                history["ann_date"]
+                .to_numpy()
+                .searchsorted(group["trade_date"].to_numpy(), side="left")
+                - 1
+            )
             visible = positions >= 0
             if visible.any():
                 selected = history.iloc[positions[visible]]
                 group.loc[visible, "holder_num"] = selected["holder_num"].to_numpy()
-                group.loc[visible, "holder_report_end_date"] = selected[
-                    "end_date"
-                ].to_numpy()
+                group.loc[visible, "holder_report_end_date"] = selected["end_date"].to_numpy()
                 group.loc[visible, "holder_ann_date"] = selected["ann_date"].to_numpy()
         parts.append(group)
 
@@ -244,10 +292,7 @@ def _load_index(root: Path) -> pd.Series:
 def build_wide_panel(root: Path) -> pd.DataFrame:
     """Build the 27-feature panel from full-market bars + alternative data."""
     alt = root / "runtime/alt-data"
-    names = _load_symbol_names(root / "runtime/full-market")
-    st = {s for s, n in names.items() if "ST" in n.upper()}
     df = load_full_market(root / "runtime/full-market")
-    df = df[~df["symbol"].isin(st)]
     df = df[df["symbol"].str[:3].isin(MAIN_BOARD)]
     panel = add_factors(df)
 
@@ -266,8 +311,17 @@ def build_wide_panel(root: Path) -> pd.DataFrame:
     panel["high_low"] = (panel["high"] - panel["low"]) / panel["close"]
 
     db = _load_by_date(alt / "daily_basic")[
-        ["ts_code", "trade_date", "circ_mv", "pe_ttm", "pb", "ps_ttm", "dv_ttm",
-         "turnover_rate", "volume_ratio"]
+        [
+            "ts_code",
+            "trade_date",
+            "circ_mv",
+            "pe_ttm",
+            "pb",
+            "ps_ttm",
+            "dv_ttm",
+            "turnover_rate",
+            "volume_ratio",
+        ]
     ].rename(columns={"ts_code": "symbol"})
     panel = panel.merge(db, on=["symbol", "trade_date"], how="left")
     panel["size_log"] = -np.log(panel["circ_mv"].where(panel["circ_mv"] > 0))
@@ -277,20 +331,29 @@ def build_wide_panel(root: Path) -> pd.DataFrame:
         ["ts_code", "trade_date", "net_mf_amount", "buy_lg_amount", "sell_lg_amount"]
     ].rename(columns={"ts_code": "symbol"})
     panel = panel.merge(mf, on=["symbol", "trade_date"], how="left")
-    panel["main_flow"] = panel["net_mf_amount"] * 10000.0 / panel["amount"].where(
-        panel["amount"] > 0)
-    panel["lg_net"] = (panel["buy_lg_amount"] - panel["sell_lg_amount"]) * 10000.0 / panel[
-        "amount"].where(panel["amount"] > 0)
+    panel["main_flow"] = (
+        panel["net_mf_amount"] * 10000.0 / panel["amount"].where(panel["amount"] > 0)
+    )
+    panel["lg_net"] = (
+        (panel["buy_lg_amount"] - panel["sell_lg_amount"])
+        * 10000.0
+        / panel["amount"].where(panel["amount"] > 0)
+    )
 
-    cyq = _load_per_symbol(alt / "cyq_perf")[
-        ["ts_code", "trade_date", "winner_rate"]].rename(columns={"ts_code": "symbol"})
+    cyq = _load_per_symbol(alt / "cyq_perf")[["ts_code", "trade_date", "winner_rate"]].rename(
+        columns={"ts_code": "symbol"}
+    )
     panel = panel.merge(cyq, on=["symbol", "trade_date"], how="left")
 
-    mg = _load_by_date(alt / "margin_detail")[["ts_code", "trade_date", "rzye"]].rename(
-        columns={"ts_code": "symbol"}).sort_values(["symbol", "trade_date"])
+    mg = (
+        _load_by_date(alt / "margin_detail")[["ts_code", "trade_date", "rzye"]]
+        .rename(columns={"ts_code": "symbol"})
+        .sort_values(["symbol", "trade_date"])
+    )
     mg["margin_chg"] = mg.groupby("symbol")["rzye"].pct_change()
-    panel = panel.merge(mg[["symbol", "trade_date", "margin_chg"]],
-                        on=["symbol", "trade_date"], how="left")
+    panel = panel.merge(
+        mg[["symbol", "trade_date", "margin_chg"]], on=["symbol", "trade_date"], how="left"
+    )
 
     holder_numbers = _load_per_symbol(alt / "stk_holdernumber")
     panel = _merge_holder_number_as_of(panel, holder_numbers)
@@ -299,8 +362,17 @@ def build_wide_panel(root: Path) -> pd.DataFrame:
     # no look-ahead: moneyflow & margin are post-close / T+1, use yesterday
     for c in ("main_flow", "lg_net", "margin_chg"):
         panel[f"{c}_prev"] = panel.groupby("symbol")[c].shift(1)
-    for c in ("size_log", "pe_ttm", "pb", "ps_ttm", "dv_ttm", "turnover_rate",
-              "volume_ratio", "winner_rate", "ep"):
+    for c in (
+        "size_log",
+        "pe_ttm",
+        "pb",
+        "ps_ttm",
+        "dv_ttm",
+        "turnover_rate",
+        "volume_ratio",
+        "winner_rate",
+        "ep",
+    ):
         panel[c] = panel.groupby("symbol")[c].ffill()
     return panel.sort_values(["symbol", "trade_date"])
 
@@ -339,14 +411,24 @@ def _prepare_forward_labels(
     grouped = prepared.groupby("symbol", sort=False)
     prepared["_label_end_date"] = grouped["trade_date"].shift(-horizon)
     prepared["_fwd"] = grouped["close"].shift(-horizon) / prepared["close"] - 1.0
-    prepared["_label"] = prepared.groupby("trade_date")["_fwd"].transform(
-        lambda values: values - values.mean()
-    )
-    prepared = prepared.dropna(subset=feats + ["_label", "_label_end_date"])
+    prepared = prepared.dropna(subset=feats + ["_fwd", "_label_end_date"])
     prepared = prepared[np.isfinite(prepared[feats].to_numpy()).all(axis=1)]
     if (prepared["_label_end_date"] <= prepared["trade_date"]).any():
         raise ValueError("forward label must end after its feature date")
     return prepared
+
+
+def _mature_relative_labels(
+    prepared: pd.DataFrame,
+    *,
+    cutoff: pd.Timestamp,
+) -> pd.DataFrame:
+    """Create cross-sectional labels from peers mature at one refit cutoff."""
+    mature = prepared[prepared["_label_end_date"] <= cutoff].copy()
+    mature["_label"] = mature.groupby("trade_date")["_fwd"].transform(
+        lambda values: values - values.mean()
+    )
+    return mature
 
 
 def _new_gbdt() -> HistGradientBoostingRegressor:
@@ -375,7 +457,7 @@ def rolling_gbdt(
     scored on an unseen validation tail. A separate production model is then
     fitted on the complete mature-label window and used until the next refit.
     """
-    required = {"trade_date", "symbol", "_label", "_label_end_date", *feats}
+    required = {"trade_date", "symbol", "_fwd", "_label_end_date", *feats}
     missing = sorted(required - set(prepared.columns))
     if missing:
         raise ValueError("prepared panel is missing: " + ", ".join(missing))
@@ -394,7 +476,7 @@ def rolling_gbdt(
     refit_dates: list[pd.Timestamp] = []
     last_refit_index: int | None = None
     for index, current in enumerate(full_dates):
-        mature = prepared[prepared["_label_end_date"] <= current]
+        mature = _mature_relative_labels(prepared, cutoff=current)
         if mature["trade_date"].nunique() < window:
             continue
         if last_refit_index is None or index - last_refit_index >= refit:
@@ -409,15 +491,13 @@ def rolling_gbdt(
     validation_days = min(refit, max(1, window // 5))
 
     for index, current in enumerate(refit_dates):
-        mature = prepared[prepared["_label_end_date"] <= current]
+        mature = _mature_relative_labels(prepared, cutoff=current)
         mature_dates = [pd.Timestamp(day) for day in sorted(mature["trade_date"].unique())]
         window_dates = mature_dates[-window:]
         window_rows = mature[mature["trade_date"].isin(window_dates)]
         evaluation_train_dates = window_dates[:-validation_days]
         validation_dates = window_dates[-validation_days:]
-        evaluation_train = window_rows[
-            window_rows["trade_date"].isin(evaluation_train_dates)
-        ]
+        evaluation_train = window_rows[window_rows["trade_date"].isin(evaluation_train_dates)]
         validation = window_rows[window_rows["trade_date"].isin(validation_dates)]
 
         evaluation_model = _new_gbdt()
@@ -431,12 +511,10 @@ def rolling_gbdt(
         production_model = _new_gbdt()
         production_model.fit(window_rows[feats].to_numpy(), window_rows["_label"].to_numpy())
         importance_rows = (
-            window_rows.sample(8000, random_state=42)
-            if len(window_rows) > 8000
-            else window_rows
+            validation.sample(8000, random_state=42) if len(validation) > 8000 else validation
         )
         importance_result = permutation_importance(
-            production_model,
+            evaluation_model,
             importance_rows[feats].to_numpy(),
             importance_rows["_label"].to_numpy(),
             n_repeats=1,
@@ -451,9 +529,7 @@ def rolling_gbdt(
             for feature, value in zip(feats, importance_result.importances_mean, strict=True)
         ]
 
-        next_refit = (
-            refit_dates[index + 1] if index + 1 < len(refit_dates) else full_dates[-1]
-        )
+        next_refit = refit_dates[index + 1] if index + 1 < len(refit_dates) else full_dates[-1]
         max_label_end = pd.Timestamp(window_rows["_label_end_date"].max())
         if max_label_end > current:
             raise ValueError("training label escaped the refit cutoff")
@@ -475,6 +551,8 @@ def rolling_gbdt(
                 "n_valid_days": len(validation_dates),
                 "train_ic": round(train_ic, 4),
                 "valid_ic": round(valid_ic, 4),
+                "metric_applies_to": "evaluation_model",
+                "production_model_fit_scope": "mature_train_plus_validation",
                 "gap_penalty": round(gap, 4),
                 "score": round(valid_ic - gap, 4),
                 "feature_importance": importance,
@@ -503,155 +581,54 @@ def rolling_gbdt(
     )
 
 
-def backtest(
-    panel: pd.DataFrame,
-    fit: Fit,
-    scale: pd.Series,
-) -> tuple[pd.Series, pd.Series, list[dict]]:
-    """Hold-to-exit backtest with realistic fills (next-open + slippage).
-
-    Daily buy/sell capped (human-executable); cashout drained at max_sell/day
-    (no single-day book dump). Exit priority: stop > profit > cashout > signal.
-
-    ``panel`` is the FULL frame (features + prices on every trading day) so the
-    backtest runs to the latest bar; signals come from ``fit.predictions``.
-    """
-    dates = sorted(panel["trade_date"].unique())
-    open_p = panel.pivot_table(index="trade_date", columns="symbol", values="open")
-    nav = 1.0
-    navs, tos, trades = [], [], []
-    holdings: dict[str, tuple[float, int]] = {}
-    exit_queue: set[str] = set()
-    for i in range(1, len(dates) - 1):
-        sd, buy_day, sell_day = dates[i - 1], dates[i], dates[i + 1]
-        sc = 1.0
-        if sd in scale.index:
-            sc = float(scale.loc[sd])
-        in_pool: set[str] = set()
-        in_buffer: set[str] = set()
-        if sd in fit.predictions:
-            syms, pred = fit.predictions[sd]
-            rk = pd.Series(pred, index=syms).rank(ascending=False)
-            in_pool = set(rk[rk <= TOP_K].index)
-            in_buffer = set(rk[rk <= TOP_K + EXIT_BUFFER].index)
-        o = open_p.loc[buy_day]
-        n_sells = n_buys = 0
-        sells_today = 0
-        if sc == 0.0:
-            exit_queue |= set(holdings.keys())
-
-        order: list[tuple[int, str]] = []
-        for sym in holdings:
-            bp, bi = holdings[sym]
-            price = o.get(sym, np.nan)
-            if pd.isna(price):
-                prio = 9
-            elif price <= bp * (1 - STOP_LOSS):
-                prio = 0
-            elif price >= bp * (1 + TAKE_PROFIT):
-                prio = 1
-            elif sym in exit_queue:
-                prio = 2
-            elif i - bi >= MIN_HOLD and sym not in in_buffer:
-                prio = 3
-            else:
-                prio = 9
-            order.append((prio, sym))
-        order.sort()
-        for _, sym in order:
-            if sells_today >= MAX_SELL:
-                break
-            bp, bi = holdings[sym]
-            price = o.get(sym, np.nan)
-            if pd.isna(price):
-                continue
-            reason = None
-            if price <= bp * (1 - STOP_LOSS):
-                reason = "stop"
-            elif price >= bp * (1 + TAKE_PROFIT):
-                reason = "profit"
-            elif sym in exit_queue:
-                reason = "cashout"
-            elif i - bi >= MIN_HOLD and sym not in in_buffer:
-                reason = "signal"
-            if reason:
-                del holdings[sym]
-                exit_queue.discard(sym)
-                n_sells += 1
-                sells_today += 1
-                trades.append({"date": str(buy_day.date()), "symbol": sym, "side": "sell",
-                               "price": round(float(price), 2), "reason": reason})
-        if sc > 0.0 and sd in fit.predictions:
-            syms, pred = fit.predictions[sd]
-            buys_today = 0
-            for sym in syms[np.argsort(-pred)]:
-                if buys_today >= MAX_BUY:
-                    break
-                if len(holdings) >= TOP_K:  # full book — do not buy until a slot frees
-                    break
-                if sym not in in_pool or sym in holdings:
-                    continue
-                price = o.get(sym, np.nan)
-                if pd.isna(price):
-                    continue
-                holdings[sym] = (price, i)
-                n_buys += 1
-                buys_today += 1
-                trades.append({"date": str(buy_day.date()), "symbol": sym, "side": "buy",
-                               "price": round(float(price), 2), "reason": "signal"})
-        o_cur, o_next = open_p.loc[buy_day], open_p.loc[sell_day]
-        rets = []
-        for sym in holdings:
-            p0, p1 = o_cur.get(sym, np.nan), o_next.get(sym, np.nan)
-            rets.append(0.0 if (pd.isna(p0) or pd.isna(p1)) else p1 / p0 - 1.0)
-        gross = float(np.nanmean(rets)) if rets else 0.0
-        turnover = (n_sells + n_buys) / max(len(holdings) + n_sells, 1)
-        nav *= 1.0 + gross - turnover * COST_PER_SIDE
-        navs.append(nav)
-        tos.append(turnover)
-    return (pd.Series(navs, index=pd.DatetimeIndex(dates[1:-1]), name="nav"),
-            pd.Series(tos, index=pd.DatetimeIndex(dates[1:-1])), trades)
-
-
 def paper_backtest(
     panel: pd.DataFrame,
     fit: Fit,
     scale: pd.Series,
+    *,
+    cost_model: dict,
+    market_rules: dict,
+    execution_policy: dict,
     initial_cash: float = 1_000_000.0,
-) -> tuple[pd.Series, list[dict]]:
-    """Paper-trading engine: a cash account that mimics real execution.
-
-    Unlike the research backtest (equal-weight, full-invested), this models an
-    actual wallet:
-      - fixed budget per name (initial_cash / TOP_K)
-      - buy deducts cash, sell adds it back (cost applied both sides)
-      - board-lot 100 shares; limit-up cannot be bought, limit-down cannot be sold
-      - suspended names (no open) cannot trade
-      - NAV = cash + mark-to-market value (close)
-    """
+) -> tuple[pd.Series, pd.Series, list[dict]]:
+    """Replay research targets with the authoritative ``quant_core`` semantics."""
     dates = sorted(panel["trade_date"].unique())
     open_p = panel.pivot_table(index="trade_date", columns="symbol", values="open")
     close_p = panel.pivot_table(index="trade_date", columns="symbol", values="close")
-    pc = panel.sort_values(["symbol", "trade_date"]).groupby("symbol")["close"].shift(1)
-    prev_close_p = panel.assign(_pc=pc).pivot_table(
-        index="trade_date", columns="symbol", values="_pc")
+    previous_close_p = close_p.ffill().shift(1)
+    rules = parse_market_rules(market_rules)
+    portfolio = SimulatedPortfolioState(
+        cash=Decimal(str(initial_cash)),
+        holdings={},
+    )
+    buy_dates: dict[str, date] = {}
+    buy_indices: dict[str, int] = {}
+    last_prices: dict[str, float] = {}
+    exit_queue: set[str] = set()
+    navs: list[float] = []
+    turnovers: list[float] = []
+    trades: list[dict] = []
 
-    # Tiered slippage by float market cap (ten-thousand CNY).
-    circ_mv = panel.drop_duplicates("symbol").set_index("symbol")["circ_mv"]
+    def trade_document(trade, *, reason: str) -> dict:
+        return {
+            "date": trade.trade_date.isoformat(),
+            "symbol": trade.symbol,
+            "side": trade.side,
+            "shares": trade.shares,
+            "price": round(float(trade.price), 4),
+            "gross_amount": float(trade.gross_amount),
+            "total_cost": float(trade.cost.total),
+            "reason": reason,
+        }
 
-    def slippage(sym: str) -> float:
-        mv = circ_mv.get(sym, np.nan)
-        if pd.isna(mv) or mv < 50 * 1e4:
-            return 0.003
-        if mv < 200 * 1e4:
-            return 0.002
-        return 0.001
-
-    cash = initial_cash
-    holdings: dict[str, dict] = {}
-    navs, trades = [], []
     for i in range(1, len(dates) - 1):
         sd, buy_day = dates[i - 1], dates[i]
+        trade_date = pd.Timestamp(buy_day).date()
+        portfolio = settle_t_plus_one(
+            portfolio,
+            trade_date=trade_date,
+            buy_dates=buy_dates,
+        )
         sc = 1.0
         if sd in scale.index:
             sc = float(scale.loc[sd])
@@ -662,83 +639,143 @@ def paper_backtest(
             rk = pd.Series(pred, index=syms).rank(ascending=False)
             in_pool = set(rk[rk <= TOP_K].index)
             in_buffer = set(rk[rk <= TOP_K + EXIT_BUFFER].index)
-        o = open_p.loc[buy_day]
-        prev_row = prev_close_p.loc[buy_day]
-        # ---- sells ----
-        for sym in list(holdings.keys()):
-            price = o.get(sym, np.nan)
-            if pd.isna(price):  # suspended — cannot sell
+        open_row = open_p.loc[buy_day]
+        close_row = close_p.loc[buy_day]
+        previous_row = previous_close_p.loc[buy_day]
+        bars = {
+            str(symbol): DailyBarView(open=float(open_price), close=float(close_row[symbol]))
+            for symbol, open_price in open_row.items()
+            if pd.notna(open_price) and pd.notna(close_row.get(symbol, np.nan))
+        }
+        previous_closes = {
+            str(symbol): float(price) for symbol, price in previous_row.items() if pd.notna(price)
+        }
+        day = ExecutionDay(
+            trade_date=trade_date,
+            bars=bars,
+            previous_closes=previous_closes,
+            slippage_bps=int(execution_policy["slippage_bps"]),
+        )
+        reference_prices = {
+            symbol: previous_closes.get(symbol, last_prices.get(symbol))
+            for symbol in portfolio.holdings
+        }
+        if any(price is None for price in reference_prices.values()):
+            raise ValueError("research replay is missing a holding reference price")
+        total_assets_before = (
+            mark_to_market(
+                portfolio,
+                prices={symbol: float(price) for symbol, price in reference_prices.items()},
+            )
+            if portfolio.holdings
+            else portfolio.cash
+        )
+        traded_gross = Decimal("0")
+        if sc == 0.0:
+            exit_queue |= set(portfolio.holdings)
+
+        order: list[tuple[int, str]] = []
+        for sym, holding in portfolio.holdings.items():
+            bar = bars.get(sym)
+            price = bar.open if bar is not None else np.nan
+            if pd.isna(price):
+                priority = 9
+            elif price <= float(holding.avg_cost) * (1 - STOP_LOSS):
+                priority = 0
+            elif price >= float(holding.avg_cost) * (1 + TAKE_PROFIT):
+                priority = 1
+            elif sym in exit_queue:
+                priority = 2
+            elif i - buy_indices.get(sym, i) >= MIN_HOLD and sym not in in_buffer:
+                priority = 3
+            else:
+                priority = 9
+            order.append((priority, sym))
+
+        sells_today = 0
+        for priority, sym in sorted(order):
+            if priority == 9 or sells_today >= MAX_SELL:
                 continue
-            prev = prev_row.get(sym, np.nan)
-            if not pd.isna(prev) and price <= prev * 0.905:  # limit-down — cannot sell
-                continue
-            h = holdings[sym]
-            cost = h["cost"]
-            reason = None
-            if price <= cost * (1 - STOP_LOSS):
+            holding = portfolio.holdings[sym]
+            bar = bars.get(sym)
+            assert bar is not None
+            if bar.open <= float(holding.avg_cost) * (1 - STOP_LOSS):
                 reason = "stop"
-            elif price >= cost * (1 + TAKE_PROFIT):
+            elif bar.open >= float(holding.avg_cost) * (1 + TAKE_PROFIT):
                 reason = "profit"
-            elif sc == 0.0:
+            elif sym in exit_queue:
                 reason = "cashout"
-            elif i - h["buy_i"] >= MIN_HOLD and sym not in in_buffer:
+            else:
                 reason = "signal"
-            if reason:
-                cash += h["shares"] * price * (1 - slippage(sym))
-                del holdings[sym]
-                trades.append({"date": str(buy_day.date()), "symbol": sym, "side": "sell",
-                               "price": round(float(price), 2), "reason": reason})
-        # ---- buys ----
+            portfolio, trade, _skip = execute_sell(
+                state=portfolio,
+                day=day,
+                symbol=sym,
+                rules=rules,
+                cost_model=cost_model,
+                reason=reason.upper(),
+            )
+            if trade is not None:
+                trades.append(trade_document(trade, reason=reason))
+                traded_gross += trade.gross_amount
+                sells_today += 1
+                if sym not in portfolio.holdings:
+                    buy_dates.pop(sym, None)
+                    buy_indices.pop(sym, None)
+                    exit_queue.discard(sym)
+
         if sc > 0.0 and sd in fit.predictions:
-            # Dynamic budget = current total assets / TOP_K (keeps full-invested
-            # equal weight as the account compounds, instead of a fixed 125k CNY).
-            c0 = close_p.loc[buy_day]
-            mv = 0.0
-            for _sym, h in holdings.items():
-                _p = c0.get(_sym, np.nan)
-                if not pd.isna(_p):
-                    h["last_price"] = float(_p)
-                mv += h["shares"] * h["last_price"]
-            total_assets = cash + mv
-            budget = total_assets / TOP_K
+            budget = total_assets_before / Decimal(TOP_K)
             syms, pred = fit.predictions[sd]
+            buys_today = 0
             for sym in syms[np.argsort(-pred)]:
-                if len(holdings) >= TOP_K:  # full book — no new buys until a slot frees
+                sym = str(sym)
+                if buys_today >= MAX_BUY or len(portfolio.holdings) >= TOP_K:
                     break
-                if cash <= 0 or sym not in in_pool or sym in holdings:
+                if sym not in in_pool or sym in portfolio.holdings:
                     continue
-                price = o.get(sym, np.nan)
-                if pd.isna(price):
+                reference = previous_closes.get(sym)
+                if reference is None:
                     continue
-                prev = prev_row.get(sym, np.nan)
-                if not pd.isna(prev) and price >= prev * 1.095:  # limit-up — cannot buy
+                lot = rules[classify_board(sym)].lot_size
+                requested = int(budget / Decimal(str(reference)) / lot) * lot
+                if requested < lot:
                     continue
-                shares = int(min(budget, cash) / price / 100) * 100
-                if shares < 100:
-                    continue
-                cash -= shares * price * (1 + slippage(sym))
-                holdings[sym] = {
-                    "shares": shares,
-                    "cost": float(price),
-                    "last_price": float(price),
-                    "buy_i": i,
-                }
-                trades.append({"date": str(buy_day.date()), "symbol": sym, "side": "buy",
-                               "price": round(float(price), 2), "reason": "signal",
-                               "shares": shares})
-        # ---- mark to market ----
-        mv = 0.0
-        c = close_p.loc[buy_day]
-        for sym, h in holdings.items():
-            p = c.get(sym, np.nan)
-            if not pd.isna(p):
-                h["last_price"] = float(p)
-            # A suspension freezes valuation at the last observable close. It
-            # does not erase the holding's market value from the account.
-            mv += h["shares"] * h["last_price"]
-        navs.append(cash + mv)
-    return (pd.Series(navs, index=pd.DatetimeIndex(dates[1:-1]), name="nav"),
-            trades)
+                portfolio, trade, _skip, bought_on = execute_buy(
+                    state=portfolio,
+                    day=day,
+                    symbol=sym,
+                    requested_shares=requested,
+                    rules=rules,
+                    cost_model=cost_model,
+                    reason="SIGNAL",
+                )
+                if trade is not None and bought_on is not None:
+                    trades.append(trade_document(trade, reason="signal"))
+                    traded_gross += trade.gross_amount
+                    buy_dates[sym] = bought_on
+                    buy_indices[sym] = i
+                    buys_today += 1
+
+        mark_prices: dict[str, float] = {}
+        for sym in portfolio.holdings:
+            bar = bars.get(sym)
+            if bar is not None:
+                last_prices[sym] = bar.close
+            elif sym not in last_prices:
+                last_prices[sym] = float(reference_prices[sym])
+            mark_prices[sym] = last_prices[sym]
+        total_assets = (
+            mark_to_market(portfolio, prices=mark_prices) if portfolio.holdings else portfolio.cash
+        )
+        navs.append(float(total_assets))
+        turnovers.append(float(traded_gross / total_assets_before) if total_assets_before else 0.0)
+    index = pd.DatetimeIndex(dates[1:-1])
+    return (
+        pd.Series(navs, index=index, name="nav"),
+        pd.Series(turnovers, index=index, name="turnover"),
+        trades,
+    )
 
 
 def _metrics(nav: pd.Series, turnover: pd.Series) -> dict:
@@ -795,11 +832,22 @@ def generate(root: Path) -> dict:
         label_horizon=LABEL_HORIZON,
     )
 
-    # research backtest (equal-weight full-invested) — for model evaluation only
-    research_nav, research_turnover, _research_trades = backtest(panel, fit, scale)
-    # paper-trading backtest (cash account) — mimics real execution
-    paper_nav, paper_trades = paper_backtest(panel, fit, scale)
-    nav, trades = paper_nav, paper_trades
+    contract_root = root / "contracts" / "examples"
+    cost_model = json.loads((contract_root / "cost-model.example.json").read_text(encoding="utf-8"))
+    market_rules = json.loads(
+        (contract_root / "market-rules.example.json").read_text(encoding="utf-8")
+    )
+    execution_policy = json.loads(
+        (contract_root / "execution-policy.example.json").read_text(encoding="utf-8")
+    )
+    nav, turnover, trades = paper_backtest(
+        panel,
+        fit,
+        scale,
+        cost_model=cost_model,
+        market_rules=market_rules,
+        execution_policy=execution_policy,
+    )
 
     # benchmark: Shanghai Composite index, normalized to 1.0 at the strategy's
     # first NAV date so the two curves start aligned.
@@ -836,30 +884,34 @@ def generate(root: Path) -> dict:
                     elif unit == "mktcap":
                         val = float(val) * 1e-4  # ten-thousand CNY -> hundred-million CNY
                     pctl = float((col <= r[f]).mean()) if col.notna().sum() > 0 else np.nan
-                    attribution.append({
-                        "feature": f,
-                        "label": label,
-                        "unit": unit,
-                        "value": round(val, 2),
-                        "percentile": round(pctl, 3),
-                    })
+                    attribution.append(
+                        {
+                            "feature": f,
+                            "label": label,
+                            "unit": unit,
+                            "value": round(val, 2),
+                            "percentile": round(pctl, 3),
+                        }
+                    )
             close_price = float(r["close"]) if len(row) else float(mv.get(s, np.nan))
             # 1M CNY initial capital, equal-weight across TOP_K names, board-lot 100
             budget = 1_000_000.0 / TOP_K
             shares = max(100, int(budget / close_price / 100) * 100) if close_price > 0 else 0
-            signals.append({
-                "symbol": str(s),
-                "name": names.get(str(s), ""),
-                "industry": industry.get(str(s), ""),
-                "score": float(round(float(sc), 4)),
-                # ten-thousand CNY -> hundred-million CNY
-                "market_cap": float(mv.get(s, np.nan)) * 1e-4,
-                "weight": round(1.0 / TOP_K, 4),
-                "close": round(close_price, 2),
-                "shares": shares,
-                "amount": round(shares * close_price, 2),
-                "attribution": attribution,
-            })
+            signals.append(
+                {
+                    "symbol": str(s),
+                    "name": names.get(str(s), ""),
+                    "industry": industry.get(str(s), ""),
+                    "score": float(round(float(sc), 4)),
+                    # ten-thousand CNY -> hundred-million CNY
+                    "market_cap": float(mv.get(s, np.nan)) * 1e-4,
+                    "weight": round(1.0 / TOP_K, 4),
+                    "close": round(close_price, 2),
+                    "shares": shares,
+                    "amount": round(shares * close_price, 2),
+                    "attribution": attribution,
+                }
+            )
 
     feature_importance = sorted(
         (fit.model_evolution or [{}])[-1].get("feature_importance", []),
@@ -889,9 +941,9 @@ def generate(root: Path) -> dict:
     # same mature-label cutoff as the model fitted on that date.
     refit_dates = [me["refit_date"] for me in (fit.model_evolution or [])]
     factor_ic_timeline = []
-    for me in (fit.model_evolution or []):
+    for me in fit.model_evolution or []:
         cur = pd.Timestamp(me["refit_date"])
-        mature = prepared[prepared["_label_end_date"] <= cur]
+        mature = _mature_relative_labels(prepared, cutoff=cur)
         mature_dates = sorted(mature["trade_date"].unique())[-WINDOW:]
         training_rows = mature[mature["trade_date"].isin(mature_dates)]
         ics = []
@@ -899,15 +951,19 @@ def generate(root: Path) -> dict:
             f_rank = training_rows.groupby("trade_date", sort=False)[f].rank()
             label_rank = training_rows.groupby("trade_date", sort=False)["_label"].rank()
             ic = f_rank.corr(label_rank)
-            ics.append({
-                "feature": f,
-                "label": FEATURE_LABELS.get(f, f),
-                "ic": round(float(ic), 4) if pd.notna(ic) else 0.0,
-            })
-        factor_ic_timeline.append({
-            "date": me["refit_date"],
-            "factors": sorted(ics, key=lambda x: -abs(x["ic"])),
-        })
+            ics.append(
+                {
+                    "feature": f,
+                    "label": FEATURE_LABELS.get(f, f),
+                    "ic": round(float(ic), 4) if pd.notna(ic) else 0.0,
+                }
+            )
+        factor_ic_timeline.append(
+            {
+                "date": me["refit_date"],
+                "factors": sorted(ics, key=lambda x: -abs(x["ic"])),
+            }
+        )
 
     # cashout history: merge consecutive cashout days (one flat event drains the
     # book over a few days) into single events, separated by a 5-day gap.
@@ -947,20 +1003,29 @@ def generate(root: Path) -> dict:
     closed_trades: list[dict] = []
     for t in trades:
         if t["side"] == "buy":
-            buy_log[t["symbol"]] = {"buy_price": t["price"], "buy_date": t["date"],
-                                    "shares": t.get("shares", 0)}
+            buy_log[t["symbol"]] = {
+                "buy_price": t["price"],
+                "buy_date": t["date"],
+                "shares": t.get("shares", 0),
+            }
         else:
             b = buy_log.pop(t["symbol"], None)
             if b is not None:
                 pnl = (t["price"] - b["buy_price"]) / b["buy_price"]
                 days = (pd.Timestamp(t["date"]) - pd.Timestamp(b["buy_date"])).days
-                closed_trades.append({
-                    "symbol": t["symbol"],
-                    "name": names.get(t["symbol"], ""),
-                    "buy_date": b["buy_date"], "buy_price": round(b["buy_price"], 2),
-                    "sell_date": t["date"], "sell_price": round(t["price"], 2),
-                    "pnl": round(pnl, 4), "days": days, "reason": t["reason"],
-                })
+                closed_trades.append(
+                    {
+                        "symbol": t["symbol"],
+                        "name": names.get(t["symbol"], ""),
+                        "buy_date": b["buy_date"],
+                        "buy_price": round(b["buy_price"], 2),
+                        "sell_date": t["date"],
+                        "sell_price": round(t["price"], 2),
+                        "pnl": round(pnl, 4),
+                        "days": days,
+                        "reason": t["reason"],
+                    }
+                )
 
     # historical daily signals: top-k for every trading day (history view).
     # A day where the market-timing scale is 0 (flat) shows NO names — the
@@ -979,21 +1044,27 @@ def generate(root: Path) -> dict:
         if not flat:
             for j in range(k):
                 s = str(syms[order[j]])
-                sig_list.append({
-                    "symbol": s,
-                    "name": names.get(s, ""),
-                    "industry": industry.get(s, ""),
-                    "score": round(float(pred[order[j]]), 4),
-                    "close": round(float(close_map.get(s, float("nan"))), 2)
-                             if pd.notna(close_map.get(s, float("nan"))) else None,
-                    "market_cap": round(float(mv_map.get(s, float("nan"))) * 1e-4, 1)
-                                  if pd.notna(mv_map.get(s, float("nan"))) else None,
-                })
-        daily_signals.append({
-            "date": str(d.date()),
-            "flat": flat,
-            "signals": sig_list,
-        })
+                sig_list.append(
+                    {
+                        "symbol": s,
+                        "name": names.get(s, ""),
+                        "industry": industry.get(s, ""),
+                        "score": round(float(pred[order[j]]), 4),
+                        "close": round(float(close_map.get(s, float("nan"))), 2)
+                        if pd.notna(close_map.get(s, float("nan")))
+                        else None,
+                        "market_cap": round(float(mv_map.get(s, float("nan"))) * 1e-4, 1)
+                        if pd.notna(mv_map.get(s, float("nan")))
+                        else None,
+                    }
+                )
+        daily_signals.append(
+            {
+                "date": str(d.date()),
+                "flat": flat,
+                "signals": sig_list,
+            }
+        )
 
     return {
         "generated_at": str(latest_date.date()),
@@ -1010,7 +1081,9 @@ def generate(root: Path) -> dict:
             "max_sell": MAX_SELL,
             "stop_loss": STOP_LOSS,
             "take_profit": TAKE_PROFIT,
-            "cost_per_side": COST_PER_SIDE,
+            "cost_model_id": cost_model["model_id"],
+            "execution_policy_id": execution_policy["policy_id"],
+            "slippage_bps": execution_policy["slippage_bps"],
             "n_features": len(FEATURES),
             "initial_cash": 1_000_000.0,
         },
@@ -1025,12 +1098,15 @@ def generate(root: Path) -> dict:
         "cashout_history": cashout_history,
         "feature_importance": feature_importance,
         "exit_reasons": exit_reasons,
-        "nav": [{"date": str(d.date()), "nav": round(float(v) / 1_000_000.0, 4)}
-                for d, v in nav.items()],
-        "benchmark": [{"date": str(d.date()), "nav": round(float(v), 4)}
-                      for d, v in bench_nav.items()],
-        "metrics": _metrics(nav / 1_000_000.0, research_turnover),
+        "nav": [
+            {"date": str(d.date()), "nav": round(float(v) / 1_000_000.0, 4)} for d, v in nav.items()
+        ],
+        "benchmark": [
+            {"date": str(d.date()), "nav": round(float(v), 4)} for d, v in bench_nav.items()
+        ],
+        "metrics": _metrics(nav / 1_000_000.0, turnover),
         "segments": {name: _segment(nav / 1_000_000.0, t0, t1) for name, t0, t1 in SEGMENTS},
+        "segment_semantics": "walk_forward_reporting_periods_not_fixed_holdouts",
         "yearly": yearly,
         "trades": trades,
     }
@@ -1044,11 +1120,14 @@ if __name__ == "__main__":
     out_dir = root / "runtime/dashboard"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "champion.json").write_text(
-        json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+        json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     m = out["metrics"]
     print(f"signal_date={out['signal_date']}  top_k={len(out['signals'])}")
-    print(f"annual {m['annual_return']:.2%} sharpe {m['sharpe']:.2f} "
-          f"maxdd {m['max_drawdown']:.2%} turnover {m['avg_turnover']:.2%}")
+    print(
+        f"annual {m['annual_return']:.2%} sharpe {m['sharpe']:.2f} "
+        f"maxdd {m['max_drawdown']:.2%} turnover {m['avg_turnover']:.2%}"
+    )
     for seg, v in out["segments"].items():
         print(f"  {seg:6s} annual {v.get('annual_return', 0):.2%} sharpe {v.get('sharpe', 0):.2f}")
     print(f"written -> {out_dir / 'champion.json'}")

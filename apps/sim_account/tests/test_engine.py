@@ -20,42 +20,59 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def _contract(name: str) -> dict:
     return json.loads(
-        (ROOT / "contracts" / "examples" / f"{name}.example.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "contracts" / "examples" / f"{name}.example.json").read_text(encoding="utf-8")
     )
 
 
-def _signal(*, sequence: int, as_of: str, weight: float) -> dict:
+def _signal(
+    *,
+    sequence: int,
+    as_of: str,
+    weight: float,
+    state: str | None = None,
+) -> dict:
     return {
         "contract_id": "production-signal",
         "schema_version": "4.0.0",
         "signal_id": f"signal-{sequence}",
         "sequence": sequence,
-        "state": "ACTIVE" if weight else "FLAT",
+        "state": state or ("ACTIVE" if weight else "FLAT"),
         "as_of": as_of,
-        "target_positions": (
-            [{"symbol": "000001.SZ", "target_weight": weight}] if weight else []
-        ),
+        "target_positions": ([{"symbol": "000001.SZ", "target_weight": weight}] if weight else []),
+        "contract_set": {
+            "cost_model_sha256": canonical_json_sha256(_contract("cost-model")),
+            "market_rules_sha256": canonical_json_sha256(_contract("market-rules")),
+            "execution_policy_sha256": canonical_json_sha256(_contract("execution-policy")),
+        },
     }
 
 
 def _market_day(*, execution_date: str, open_price: float | None, close: float = 10.0) -> dict:
-    bars = (
-        [{"symbol": "000001.SZ", "open": open_price, "close": close}]
-        if open_price is not None
-        else []
-    )
+    bars = [{"symbol": "600000.SH", "open": 8.0, "close": 8.1}]
+    if open_price is not None:
+        bars.append({"symbol": "000001.SZ", "open": open_price, "close": close})
+    previous_trade_date = "2026-08-17" if execution_date == "2026-08-18" else "2026-08-18"
     return {
         "contract_id": "simulated-market-day",
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "execution_date": execution_date,
-        "previous_trade_date": "2026-08-17" if execution_date == "2026-08-18" else "2026-08-18",
+        "previous_trade_date": previous_trade_date,
         "dataset_id": f"dataset-{execution_date}",
         "dataset_snapshot_sha256": "e" * 64,
         "session_complete": True,
         "bars": bars,
-        "previous_closes": [{"symbol": "000001.SZ", "close": 10.0}],
+        "previous_closes": [
+            {
+                "symbol": "000001.SZ",
+                "trade_date": previous_trade_date,
+                "close": 10.0,
+            },
+            {
+                "symbol": "600000.SH",
+                "trade_date": previous_trade_date,
+                "close": 8.0,
+            },
+        ],
     }
 
 
@@ -108,7 +125,11 @@ def test_market_day_is_built_from_one_exact_immutable_snapshot() -> None:
     )
 
     assert document["dataset_snapshot_sha256"] == snapshot.snapshot_sha256
+    assert document["schema_version"] == "2.0.0"
     assert document["bars"] == [{"symbol": "000001.SZ", "open": 10.1, "close": 10.2}]
+    assert document["previous_closes"] == [
+        {"symbol": "000001.SZ", "trade_date": "2026-08-17", "close": 10.0}
+    ]
 
 
 def test_account_buys_then_sells_forward_without_rewriting_history() -> None:
@@ -159,6 +180,95 @@ def test_suspended_holding_uses_an_explicit_frozen_valuation() -> None:
     assert second.document["holdings"][0]["valuation_frozen"] is True
     assert second.document["holdings"][0]["market_value"] > 0
     assert second.document["total_assets"] > second.document["cash"]
+
+
+def test_multi_day_suspension_keeps_the_last_traded_close() -> None:
+    first = _advance(
+        signal=_signal(sequence=1, as_of="2026-08-17", weight=0.5),
+        market_day=_market_day(execution_date="2026-08-18", open_price=10.0),
+    )
+    second = _advance(
+        signal=_signal(
+            sequence=2,
+            as_of="2026-08-18",
+            weight=0.5,
+            state="HOLD",
+        ),
+        market_day=_market_day(execution_date="2026-08-19", open_price=None),
+        previous_state=dict(first.document),
+    )
+    third_market = _market_day(execution_date="2026-08-20", open_price=None)
+    third_market["previous_trade_date"] = "2026-08-19"
+    third_market["previous_closes"] = [
+        {"symbol": "600000.SH", "trade_date": "2026-08-19", "close": 8.1}
+    ]
+    third = _advance(
+        signal=_signal(
+            sequence=3,
+            as_of="2026-08-19",
+            weight=0.5,
+            state="HOLD",
+        ),
+        market_day=third_market,
+        previous_state=dict(second.document),
+    )
+
+    assert third.document["trades"] == []
+    assert third.document["holdings"][0]["last_price"] == 10.0
+    assert third.document["holdings"][0]["valuation_frozen"] is True
+
+
+def test_reduce_only_never_buys_from_an_empty_account() -> None:
+    result = _advance(
+        signal=_signal(
+            sequence=1,
+            as_of="2026-08-17",
+            weight=0.5,
+            state="REDUCE_ONLY",
+        ),
+        market_day=_market_day(execution_date="2026-08-18", open_price=10.0),
+    )
+
+    assert result.document["trades"] == []
+    assert result.document["holdings"] == []
+    assert result.document["skips"] == [
+        {
+            "symbol": "000001.SZ",
+            "side": "buy",
+            "reason_code": "REDUCE_ONLY_NO_BUY",
+        }
+    ]
+
+
+def test_hold_marks_the_book_without_rebalancing() -> None:
+    first = _advance(
+        signal=_signal(sequence=1, as_of="2026-08-17", weight=0.5),
+        market_day=_market_day(execution_date="2026-08-18", open_price=10.0),
+    )
+    second = _advance(
+        signal=_signal(
+            sequence=2,
+            as_of="2026-08-18",
+            weight=0.9,
+            state="HOLD",
+        ),
+        market_day=_market_day(execution_date="2026-08-19", open_price=10.2),
+        previous_state=dict(first.document),
+    )
+
+    assert second.document["trades"] == []
+    assert second.document["holdings"][0]["shares"] == first.document["holdings"][0]["shares"]
+
+
+def test_execution_contract_hash_mismatch_fails_closed() -> None:
+    signal = _signal(sequence=1, as_of="2026-08-17", weight=0.5)
+    signal["contract_set"]["cost_model_sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match="cost_model_sha256"):
+        _advance(
+            signal=signal,
+            market_day=_market_day(execution_date="2026-08-18", open_price=10.0),
+        )
 
 
 def test_signal_replay_or_gap_is_rejected() -> None:

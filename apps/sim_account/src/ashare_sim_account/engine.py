@@ -14,8 +14,10 @@ from ashare_quant_core import (
     DatasetSnapshot,
     ExecutionDay,
     Holding,
+    RuntimeState,
     SimulatedPortfolioState,
     classify_board,
+    constrain_execution_targets,
     execute_buy,
     execute_sell,
     mark_to_market,
@@ -45,8 +47,11 @@ def build_market_day(
     """Build one complete simulated market day from an immutable snapshot."""
     if snapshot.as_of != execution_date:
         raise ValueError("market-day snapshot as_of must equal execution_date")
-    if previous_trade_date >= execution_date:
-        raise ValueError("previous trade date must precede execution date")
+    prior_market_dates = sorted(
+        {bar.trade_date for bar in snapshot.records if bar.trade_date < execution_date}
+    )
+    if not prior_market_dates or prior_market_dates[-1] != previous_trade_date:
+        raise ValueError("previous_trade_date must be the latest market date before execution_date")
     bars = [
         {
             "symbol": bar.symbol,
@@ -56,10 +61,20 @@ def build_market_day(
         for bar in snapshot.records
         if bar.trade_date == execution_date
     ]
+    latest_by_symbol = {}
+    for bar in snapshot.records:
+        if bar.trade_date >= execution_date:
+            continue
+        current = latest_by_symbol.get(bar.symbol)
+        if current is None or bar.trade_date > current.trade_date:
+            latest_by_symbol[bar.symbol] = bar
     previous_closes = [
-        {"symbol": bar.symbol, "close": bar.close}
-        for bar in snapshot.records
-        if bar.trade_date == previous_trade_date
+        {
+            "symbol": bar.symbol,
+            "trade_date": bar.trade_date.isoformat(),
+            "close": bar.close,
+        }
+        for bar in latest_by_symbol.values()
     ]
     if not bars:
         raise ValueError("immutable snapshot contains no execution-date bars")
@@ -67,7 +82,7 @@ def build_market_day(
         raise ValueError("immutable snapshot contains no previous-trade-date bars")
     return {
         "contract_id": "simulated-market-day",
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "execution_date": execution_date.isoformat(),
         "previous_trade_date": previous_trade_date.isoformat(),
         "dataset_id": snapshot.dataset_id,
@@ -86,13 +101,14 @@ def _restore_portfolio(
     previous_state: Mapping[str, Any] | None,
     *,
     initial_cash: Decimal,
-) -> tuple[SimulatedPortfolioState, dict[str, date], Decimal, int]:
+) -> tuple[SimulatedPortfolioState, dict[str, date], dict[str, float], Decimal, int]:
     if previous_state is None:
-        return SimulatedPortfolioState(cash=initial_cash, holdings={}), {}, initial_cash, 1
+        return SimulatedPortfolioState(cash=initial_cash, holdings={}), {}, {}, initial_cash, 1
     if previous_state.get("contract_id") != "simulated-account-state":
         raise ValueError("previous state is not a simulated-account-state")
     holdings: dict[str, Holding] = {}
     buy_dates: dict[str, date] = {}
+    last_prices: dict[str, float] = {}
     for item in previous_state["holdings"]:
         symbol = str(item["symbol"])
         holdings[symbol] = Holding(
@@ -100,6 +116,10 @@ def _restore_portfolio(
             locked_shares=int(item["locked_shares"]),
             avg_cost=_decimal(item["avg_cost"]),
         )
+        last_price = float(item["last_price"])
+        if last_price <= 0:
+            raise ValueError(f"previous state has invalid last price for {symbol}")
+        last_prices[symbol] = last_price
         if item.get("last_buy_date") is not None:
             buy_dates[symbol] = date.fromisoformat(str(item["last_buy_date"]))
     recorded_initial_cash = _decimal(previous_state["initial_cash"])
@@ -111,6 +131,7 @@ def _restore_portfolio(
             holdings=holdings,
         ),
         buy_dates,
+        last_prices,
         recorded_initial_cash,
         int(previous_state["account_sequence"]) + 1,
     )
@@ -138,8 +159,31 @@ def _parse_market_day(
         symbol = str(item["symbol"])
         if symbol in previous_closes:
             raise ValueError(f"duplicate previous close: {symbol}")
+        close_date = date.fromisoformat(str(item["trade_date"]))
+        if close_date >= execution_date:
+            raise ValueError(f"previous close date must precede execution for {symbol}")
         previous_closes[symbol] = float(item["close"])
     return bars, previous_closes
+
+
+def _require_signal_contract_binding(
+    production_signal: Mapping[str, Any],
+    *,
+    cost_model: Mapping[str, Any],
+    market_rules: Mapping[str, Any],
+    execution_policy: Mapping[str, Any],
+) -> None:
+    contract_set = production_signal.get("contract_set")
+    if not isinstance(contract_set, Mapping):
+        raise ValueError("production signal is missing its contract set")
+    bindings = {
+        "cost_model_sha256": cost_model,
+        "market_rules_sha256": market_rules,
+        "execution_policy_sha256": execution_policy,
+    }
+    for field, document in bindings.items():
+        if contract_set.get(field) != canonical_json_sha256(document):
+            raise ValueError(f"production signal {field} does not match execution contract")
 
 
 def _trade_document(trade) -> dict[str, object]:
@@ -178,6 +222,16 @@ def advance_account(
         raise ValueError("generated_at must include a timezone")
     if production_signal.get("contract_id") != "production-signal":
         raise ValueError("input is not a production-signal")
+    _require_signal_contract_binding(
+        production_signal,
+        cost_model=cost_model,
+        market_rules=market_rules,
+        execution_policy=execution_policy,
+    )
+    try:
+        signal_state = RuntimeState(str(production_signal["state"]))
+    except (KeyError, ValueError) as exc:
+        raise ValueError("unsupported production signal state") from exc
     signal_as_of = date.fromisoformat(str(production_signal["as_of"]))
     if execution_date <= signal_as_of:
         raise ValueError("execution date must be after the signal as_of")
@@ -188,7 +242,7 @@ def advance_account(
     if date.fromisoformat(str(market_day["previous_trade_date"])) != signal_as_of:
         raise ValueError("market previous_trade_date must match the signal as_of")
 
-    portfolio, buy_dates, initial_cash, account_sequence = _restore_portfolio(
+    portfolio, buy_dates, previous_last_prices, initial_cash, account_sequence = _restore_portfolio(
         previous_state,
         initial_cash=initial_cash,
     )
@@ -216,9 +270,11 @@ def advance_account(
     )
 
     held_reference_prices = {
-        symbol: previous_closes[symbol]
+        symbol: previous_closes.get(symbol, previous_last_prices.get(symbol))
         for symbol in portfolio.holdings
-        if symbol in previous_closes
+    }
+    held_reference_prices = {
+        symbol: price for symbol, price in held_reference_prices.items() if price is not None
     }
     if set(held_reference_prices) != set(portfolio.holdings):
         missing = sorted(set(portfolio.holdings) - set(held_reference_prices))
@@ -237,7 +293,7 @@ def advance_account(
         targets[symbol] = float(item["target_weight"])
     if sum(targets.values()) > 1.0 + 1e-9:
         raise ValueError("target weights exceed total account exposure")
-    desired_shares: dict[str, int] = {}
+    raw_desired_shares: dict[str, int] = {}
     skips: list[dict[str, str]] = []
     for symbol, weight in sorted(targets.items()):
         reference = previous_closes.get(symbol)
@@ -247,9 +303,28 @@ def advance_account(
             )
             continue
         lot = rules[classify_board(symbol)].lot_size
-        desired_shares[symbol] = int(float(total_assets_before) * weight / reference / lot) * lot
+        raw_desired_shares[symbol] = (
+            int(float(total_assets_before) * weight / reference / lot) * lot
+        )
+
+    current_shares = {symbol: holding.shares for symbol, holding in portfolio.holdings.items()}
+    desired_shares = constrain_execution_targets(
+        state=signal_state,
+        desired_shares=raw_desired_shares,
+        current_shares=current_shares,
+    )
+    for symbol in sorted(set(raw_desired_shares) | set(current_shares)):
+        raw = raw_desired_shares.get(symbol, 0)
+        constrained = desired_shares.get(symbol, 0)
+        if constrained == raw:
+            continue
+        side = "buy" if raw > constrained else "sell"
+        reason = "HOLD_NO_TRADE" if signal_state is RuntimeState.HOLD else "REDUCE_ONLY_NO_BUY"
+        skips.append({"symbol": symbol, "side": side, "reason_code": reason})
 
     trades: list[dict[str, object]] = []
+    cash_before_trades = portfolio.cash
+    cash_delta = Decimal("0")
     for symbol in sorted(portfolio.holdings):
         held = portfolio.holdings[symbol].shares
         desired = desired_shares.get(symbol, 0)
@@ -266,6 +341,7 @@ def advance_account(
         )
         if trade is not None:
             trades.append(_trade_document(trade))
+            cash_delta += trade.gross_amount - trade.cost.total
             if symbol not in portfolio.holdings:
                 buy_dates.pop(symbol, None)
         elif skip is not None:
@@ -289,11 +365,15 @@ def advance_account(
         )
         if trade is not None and bought_on is not None:
             trades.append(_trade_document(trade))
+            cash_delta -= trade.gross_amount + trade.cost.total
             buy_dates[symbol] = bought_on
         elif skip is not None:
             skips.append(
                 {"symbol": skip.symbol, "side": skip.side, "reason_code": skip.reason_code}
             )
+
+    if portfolio.cash != cash_before_trades + cash_delta:
+        raise ValueError("simulated cash ledger does not reconcile")
 
     mark_prices: dict[str, float] = {}
     frozen_symbols: set[str] = set()
@@ -304,12 +384,26 @@ def advance_account(
         elif symbol in previous_closes:
             mark_prices[symbol] = previous_closes[symbol]
             frozen_symbols.add(symbol)
+        elif symbol in previous_last_prices:
+            mark_prices[symbol] = previous_last_prices[symbol]
+            frozen_symbols.add(symbol)
         else:
             raise ValueError(f"missing mark price for {symbol}")
     total_assets = (
         mark_to_market(portfolio, prices=mark_prices) if portfolio.holdings else portfolio.cash
     )
     market_value = total_assets - portfolio.cash
+    expected_market_value = sum(
+        (
+            Decimal(holding.shares) * Decimal(str(mark_prices[symbol]))
+            for symbol, holding in portfolio.holdings.items()
+        ),
+        Decimal("0"),
+    )
+    if market_value != expected_market_value:
+        raise ValueError("simulated holdings do not reconcile to market value")
+    if total_assets != portfolio.cash + market_value:
+        raise ValueError("simulated account assets do not reconcile")
     signal_sha256 = canonical_json_sha256(production_signal)
     previous_state_sha256 = (
         canonical_json_sha256(previous_state) if previous_state is not None else None
@@ -326,16 +420,14 @@ def advance_account(
                 "last_price": last_price,
                 "market_value": holding.shares * last_price,
                 "target_weight": targets.get(symbol, 0.0),
-                "last_buy_date": (
-                    buy_dates[symbol].isoformat() if symbol in buy_dates else None
-                ),
+                "last_buy_date": (buy_dates[symbol].isoformat() if symbol in buy_dates else None),
                 "valuation_frozen": symbol in frozen_symbols,
             }
         )
 
     document = {
         "contract_id": "simulated-account-state",
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "state_id": f"{account_id}-{execution_date.isoformat()}-seq{account_sequence}",
         "account_id": account_id,
         "account_sequence": account_sequence,
@@ -345,7 +437,7 @@ def advance_account(
         "source_signal": {
             "signal_id": str(production_signal["signal_id"]),
             "sequence": signal_sequence,
-            "state": str(production_signal["state"]),
+            "state": signal_state.value,
             "as_of": signal_as_of.isoformat(),
             "sha256": signal_sha256,
         },

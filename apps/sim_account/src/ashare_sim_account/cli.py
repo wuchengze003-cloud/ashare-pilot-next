@@ -26,12 +26,19 @@ def _load_object(path: Path) -> dict:
     return document
 
 
-def _load_schemas(contracts_root: Path) -> dict[str, dict]:
+def _load_schemas(
+    contracts_root: Path,
+) -> tuple[dict[str, dict], dict[tuple[str, str], dict]]:
     registry = _load_object(contracts_root / "registry.json")
     schemas: dict[str, dict] = {}
+    versioned: dict[tuple[str, str], dict] = {}
     for entry in registry["contracts"]:
-        schemas[str(entry["contract_id"])] = _load_object(contracts_root / entry["schema"])
-    return schemas
+        contract_id = str(entry["contract_id"])
+        schema_version = str(entry["schema_version"])
+        schema = _load_object(contracts_root / entry["schema"])
+        schemas[contract_id] = schema
+        versioned[(contract_id, schema_version)] = schema
+    return schemas, versioned
 
 
 def _validate(document: dict, schema: dict) -> None:
@@ -63,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     contracts_root = Path(args.contracts_root)
-    schemas = _load_schemas(contracts_root)
+    schemas, versioned_schemas = _load_schemas(contracts_root)
     signal_artifacts = load_current_run(
         runs_root=Path(args.signal_runs_root),
         head_path=Path(args.signal_head),
@@ -89,13 +96,24 @@ def main(argv: list[str] | None = None) -> int:
     cost_model = _load_object(Path(args.cost_model))
     market_rules = _load_object(Path(args.market_rules))
     execution_policy = _load_object(Path(args.execution_policy))
+    _validate(cost_model, schemas["cost-model"])
+    _validate(market_rules, schemas["market-rules"])
+    _validate(execution_policy, schemas["execution-policy"])
     _validate(market_day, schemas["simulated-market-day"])
     previous_state = load_current_account_state(
         runtime_root=Path(args.runtime_root),
         account_id=args.account_id,
     )
     if previous_state is not None:
-        _validate(dict(previous_state), schemas["simulated-account-state"])
+        previous_document = dict(previous_state)
+        previous_schema_key = (
+            "simulated-account-state",
+            str(previous_document.get("schema_version")),
+        )
+        previous_schema = versioned_schemas.get(previous_schema_key)
+        if previous_schema is None:
+            raise ValueError("unsupported previous simulated account schema version")
+        _validate(previous_document, previous_schema)
     result = advance_account(
         account_id=args.account_id,
         production_signal=production_signal,

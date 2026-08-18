@@ -43,9 +43,6 @@ def prepare_panel(
     result["_label_end_date"] = grouped["trade_date"].shift(-label_horizon)
     result["_fwd_close"] = grouped["close"].shift(-label_horizon)
     result["_fwd_ret"] = result["_fwd_close"] / result["close"] - 1.0
-    result["_label"] = result.groupby("trade_date")["_fwd_ret"].transform(
-        lambda s: s - s.mean()
-    )
 
     feature_cols: list[str] = []
     for factor in factors:
@@ -59,6 +56,23 @@ def prepare_panel(
     # They may be scored, but rolling_fit excludes them from model fitting.
     result = result.dropna(subset=feature_cols)
     return result, feature_cols
+
+
+def _mature_relative_labels(
+    prepared: pd.DataFrame,
+    *,
+    cutoff: pd.Timestamp,
+) -> pd.DataFrame:
+    """Build relative labels only from peers observable at ``cutoff``."""
+    mature = prepared[
+        prepared["_fwd_ret"].notna()
+        & prepared["_label_end_date"].notna()
+        & (prepared["_label_end_date"] <= cutoff)
+    ].copy()
+    mature["_label"] = mature.groupby("trade_date")["_fwd_ret"].transform(
+        lambda values: values - values.mean()
+    )
+    return mature
 
 
 def _make_model(model: str):
@@ -86,7 +100,7 @@ def rolling_fit(
 ) -> RollingFit:
     """Walk-forward fit/predict: refit every ``refit_every`` days on the
     trailing ``window`` days, predict the following days out-of-sample."""
-    required = {"trade_date", "_label", "_label_end_date", *feature_cols}
+    required = {"trade_date", "_fwd_ret", "_label_end_date", *feature_cols}
     missing = sorted(required - set(prepared.columns))
     if missing:
         raise ValueError("prepared panel is missing: " + ", ".join(missing))
@@ -96,11 +110,7 @@ def rolling_fit(
 
     last_refit_index: int | None = None
     for index, current in enumerate(dates):
-        mature = prepared[
-            prepared["_label"].notna()
-            & prepared["_label_end_date"].notna()
-            & (prepared["_label_end_date"] <= current)
-        ]
+        mature = _mature_relative_labels(prepared, cutoff=current)
         mature_dates = [pd.Timestamp(day) for day in sorted(mature["trade_date"].unique())]
         if len(mature_dates) < window:
             continue
@@ -139,9 +149,7 @@ def nav_from_predictions(
     """
     dates = sorted(prepared["trade_date"].unique())
     ret_1d = prepared.pivot_table(index="trade_date", columns="symbol", values="ret_1d")
-    symbol_by_date = {
-        d: prepared[prepared["trade_date"] == d]["symbol"].to_numpy() for d in dates
-    }
+    symbol_by_date = {d: prepared[prepared["trade_date"] == d]["symbol"].to_numpy() for d in dates}
 
     nav = initial_capital
     nav_values: list[float] = []
@@ -178,9 +186,7 @@ def nav_from_predictions(
     return pd.Series(nav_values, index=pd.DatetimeIndex(dates), name="nav")
 
 
-def market_trend_filter(
-    prepared: pd.DataFrame, *, ma_window: int = 20
-) -> pd.Series:
+def market_trend_filter(prepared: pd.DataFrame, *, ma_window: int = 20) -> pd.Series:
     """Simple timing filter: 1.0 when the equal-weight market NAV is above its
     moving average, 0.0 below (stay out of broad downtrends)."""
     market = prepared.groupby("trade_date")["ret_1d"].mean()

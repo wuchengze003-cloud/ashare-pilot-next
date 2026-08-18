@@ -30,9 +30,7 @@ def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -
         expected_delisted = document["expected_delisted_member_days"]
         expected_delisted_count = document["expected_delisted_member_day_count"]
         if expected_delisted_count != len(expected_delisted):
-            raise ValueError(
-                f"{path}: expected-delisted count does not match member-day records"
-            )
+            raise ValueError(f"{path}: expected-delisted count does not match member-day records")
 
         classified_member_days = (
             document["bar_member_days"]
@@ -41,21 +39,16 @@ def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -
             + len(document["missing_member_days"])
         )
         if classified_member_days != document["expected_member_days"]:
-            raise ValueError(
-                f"{path}: classified member-days do not reconcile to expected total"
-            )
+            raise ValueError(f"{path}: classified member-days do not reconcile to expected total")
 
         expected_delisted_keys = {
             (item["symbol"], item["trade_date"]) for item in expected_delisted
         }
         missing_keys = {
-            (item["symbol"], item["trade_date"])
-            for item in document["missing_member_days"]
+            (item["symbol"], item["trade_date"]) for item in document["missing_member_days"]
         }
         if expected_delisted_keys & missing_keys:
-            raise ValueError(
-                f"{path}: member-day cannot be both expected-delisted and missing"
-            )
+            raise ValueError(f"{path}: member-day cannot be both expected-delisted and missing")
 
     if contract_id == "cost-model":
         source_ids = [source["source_id"] for source in document["sources"]]
@@ -72,22 +65,17 @@ def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -
             segment_ids.add(segment_id)
 
             effective_from = parse_date(segment["effective_from"])
-            effective_to = (
-                parse_date(segment["effective_to"]) if segment["effective_to"] else None
-            )
+            effective_to = parse_date(segment["effective_to"]) if segment["effective_to"] else None
             if effective_to is not None and effective_from > effective_to:
                 raise ValueError(f"{path}: cost segment {segment_id} ends before it starts")
 
             unknown_sources = sorted(set(segment["source_ids"]) - known_source_ids)
             if unknown_sources:
                 raise ValueError(
-                    f"{path}: cost segment {segment_id} has unknown sources "
-                    f"{unknown_sources}"
+                    f"{path}: cost segment {segment_id} has unknown sources {unknown_sources}"
                 )
             for market in segment["markets"]:
-                by_market.setdefault(market, []).append(
-                    (effective_from, effective_to, segment_id)
-                )
+                by_market.setdefault(market, []).append((effective_from, effective_to, segment_id))
 
         for market, periods in by_market.items():
             ordered = sorted(periods, key=lambda period: (period[0], period[2]))
@@ -95,8 +83,7 @@ def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -
                 is_last = index == len(ordered) - 1
                 if effective_to is None and not is_last:
                     raise ValueError(
-                        f"{path}: open-ended cost segment {segment_id} is not last "
-                        f"for {market}"
+                        f"{path}: open-ended cost segment {segment_id} is not last for {market}"
                     )
                 if is_last:
                     if effective_to is not None:
@@ -107,8 +94,7 @@ def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -
                 next_from = ordered[index + 1][0]
                 if effective_to is None or effective_to.toordinal() + 1 != next_from.toordinal():
                     raise ValueError(
-                        f"{path}: cost segments for {market} must be contiguous "
-                        "and non-overlapping"
+                        f"{path}: cost segments for {market} must be contiguous and non-overlapping"
                     )
 
     if contract_id == "universe":
@@ -164,9 +150,48 @@ def validate_semantics(contract_id: str, document: dict[str, Any], path: Path) -
         if champion is not None and champion_hash != champion["sha256"]:
             raise ValueError(f"{path}: champion hash does not match champion")
 
-    if contract_id == "stage-health" and parse_datetime(
-        document["started_at"]
-    ) > parse_datetime(document["finished_at"]):
+    if contract_id == "simulated-market-day" and document.get("schema_version") == "2.0.0":
+        execution_date = parse_date(document["execution_date"])
+        previous_trade_date = parse_date(document["previous_trade_date"])
+        if previous_trade_date >= execution_date:
+            raise ValueError(f"{path}: previous trade date must precede execution date")
+        symbols: set[str] = set()
+        for item in document["previous_closes"]:
+            symbol = item["symbol"]
+            if symbol in symbols:
+                raise ValueError(f"{path}: duplicate previous-close symbol")
+            symbols.add(symbol)
+            close_date = parse_date(item["trade_date"])
+            if close_date > previous_trade_date:
+                raise ValueError(
+                    f"{path}: security previous close is later than the market previous date"
+                )
+
+    if contract_id == "simulated-account-state" and document.get("schema_version") == "2.0.0":
+        holdings = document["holdings"]
+        for item in holdings:
+            if item["locked_shares"] > item["shares"]:
+                raise ValueError(f"{path}: locked shares exceed held shares")
+        holdings_value = sum(item["market_value"] for item in holdings)
+        if abs(holdings_value - document["market_value"]) > 1e-6:
+            raise ValueError(f"{path}: holdings do not reconcile to market value")
+        total_assets = document["cash"] + document["market_value"]
+        if abs(total_assets - document["total_assets"]) > 1e-6:
+            raise ValueError(f"{path}: cash plus market value does not equal total assets")
+        expected_nav = document["total_assets"] / document["initial_cash"]
+        if abs(expected_nav - document["nav"]) > 1e-12:
+            raise ValueError(f"{path}: nav does not reconcile to total assets")
+        state = document["source_signal"]["state"]
+        if state == "HOLD" and document["trades"]:
+            raise ValueError(f"{path}: HOLD account state cannot contain trades")
+        if state in {"REDUCE_ONLY", "FLAT"} and any(
+            trade["side"] == "buy" for trade in document["trades"]
+        ):
+            raise ValueError(f"{path}: degraded account state cannot contain buys")
+
+    if contract_id == "stage-health" and parse_datetime(document["started_at"]) > parse_datetime(
+        document["finished_at"]
+    ):
         raise ValueError(f"{path}: stage finishes before it starts")
 
     if contract_id == "web-state":
@@ -231,9 +256,7 @@ def validate_registry() -> tuple[int, int]:
         schema_version = entry["schema_version"]
         contract_version = (contract_id, schema_version)
         if contract_version in contract_versions:
-            raise ValueError(
-                f"duplicate contract version: {contract_id} {schema_version}"
-            )
+            raise ValueError(f"duplicate contract version: {contract_id} {schema_version}")
         contract_versions.add(contract_version)
 
         schema_path = CONTRACTS / entry["schema"]

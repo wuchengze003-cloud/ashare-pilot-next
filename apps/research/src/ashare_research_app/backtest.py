@@ -245,11 +245,7 @@ def run_walk_forward(
             if target_index > train_end_index:
                 continue
             bar_index = next(
-                (
-                    i
-                    for i, bar in enumerate(symbol_history)
-                    if bar.trade_date == row.trade_date
-                ),
+                (i for i, bar in enumerate(symbol_history) if bar.trade_date == row.trade_date),
                 None,
             )
             if bar_index is None:
@@ -283,11 +279,7 @@ def run_walk_forward(
                 continue
             symbol_history = history[row.symbol]
             bar_index = next(
-                (
-                    i
-                    for i, bar in enumerate(symbol_history)
-                    if bar.trade_date == row.trade_date
-                ),
+                (i for i, bar in enumerate(symbol_history) if bar.trade_date == row.trade_date),
                 None,
             )
             if bar_index is None:
@@ -381,9 +373,7 @@ def run_walk_forward(
         held_prices = {
             symbol: prev_prices[symbol] for symbol in state.holdings if symbol in prev_prices
         }
-        total_assets = (
-            mark_to_market(state, prices=held_prices) if held_prices else state.cash
-        )
+        total_assets = mark_to_market(state, prices=held_prices) if held_prices else state.cash
         asset_samples.append(total_assets)
 
         day_bars: dict[str, DailyBarView | None] = {}
@@ -482,10 +472,13 @@ def run_walk_forward(
                         buy_dates.setdefault(symbol, bought_on)
                     record_trade(symbol, "buy", trade, skip)
 
-        held_gross_weight = sum(
-            holding.shares * prev_prices.get(symbol, 0.0)
-            for symbol, holding in state.holdings.items()
-        ) / total_assets_float
+        held_gross_weight = (
+            sum(
+                holding.shares * prev_prices.get(symbol, 0.0)
+                for symbol, holding in state.holdings.items()
+            )
+            / total_assets_float
+        )
         available_slots = max_positions - len(state.holdings)
         exposure_budget = max_gross_exposure - held_gross_weight
         for symbol in targets:
@@ -575,9 +568,7 @@ def run_walk_forward(
         if asset_samples
         else Decimal(1)
     )
-    turnover = (
-        float(gross_traded / average_assets) / executed_days if executed_days else 0.0
-    )
+    turnover = float(gross_traded / average_assets) / executed_days if executed_days else 0.0
 
     latest_signal_date = signal_dates[-1]
     latest_scores = score_production(latest_signal_date)
@@ -723,7 +714,7 @@ def run_walk_forward(
         final_state=state,
         final_prices=final_prices,
         buy_dates=dict(buy_dates),
-        trades=tuple(trades[-40:]),
+        trades=tuple(trades),
         latest_signal_date=latest_signal_date,
         recommendations=tuple(recommendations),
         feature_weights=tuple(feature_weights[:3]),

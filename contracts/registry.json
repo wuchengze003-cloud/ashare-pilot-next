@@ -109,10 +109,22 @@
       "examples": ["examples/simulated-market-day.example.json"]
     },
     {
+      "contract_id": "simulated-market-day",
+      "schema_version": "2.0.0",
+      "schema": "schemas/simulated-market-day-v2.schema.json",
+      "examples": ["examples/simulated-market-day-v2.example.json"]
+    },
+    {
       "contract_id": "simulated-account-state",
       "schema_version": "1.0.0",
       "schema": "schemas/simulated-account-state.schema.json",
       "examples": ["examples/simulated-account-state.example.json"]
+    },
+    {
+      "contract_id": "simulated-account-state",
+      "schema_version": "2.0.0",
+      "schema": "schemas/simulated-account-state-v2.schema.json",
+      "examples": ["examples/simulated-account-state-v2.example.json"]
     },
     {
       "contract_id": "simulated-account-head",

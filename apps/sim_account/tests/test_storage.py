@@ -83,3 +83,35 @@ def test_symlink_commit_marker_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="not committed"):
         load_current_account_state(runtime_root=tmp_path, account_id="paper-main")
+
+
+def test_missing_head_does_not_silently_restart_an_existing_account(
+    tmp_path: Path,
+) -> None:
+    state = _state(sequence=1, previous=None)
+    commit_account_state(runtime_root=tmp_path, document=state)
+    head = tmp_path / "sim-accounts" / "paper-main" / "current-state.json"
+    head.unlink()
+
+    with pytest.raises(ValueError, match="head is missing"):
+        load_current_account_state(runtime_root=tmp_path, account_id="paper-main")
+
+
+def test_account_publication_fsyncs_files_and_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+    real_fsync = __import__("os").fsync
+
+    def recording_fsync(descriptor: int) -> None:
+        calls.append(descriptor)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr("ashare_sim_account.storage.os.fsync", recording_fsync)
+    commit_account_state(
+        runtime_root=tmp_path,
+        document=_state(sequence=1, previous=None),
+    )
+
+    assert len(calls) >= 7

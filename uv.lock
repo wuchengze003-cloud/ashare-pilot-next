@@ -93,12 +93,17 @@ source = { editable = "apps/signal_runner" }
 dependencies = [
     { name = "ashare-quant-core" },
     { name = "jsonschema", extra = ["format"] },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scikit-learn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "ashare-quant-core", editable = "packages/quant_core" },
     { name = "jsonschema", extras = ["format"], specifier = ">=4.25,<5" },
+    { name = "numpy", specifier = ">=2.0,<3" },
+    { name = "scikit-learn", specifier = ">=1.5,<2" },
 ]
 
 [[package]]
