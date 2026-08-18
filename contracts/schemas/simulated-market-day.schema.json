@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/simulated-market-day/1.0.0",
+  "title": "Simulated Market Day",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id", "schema_version", "execution_date", "previous_trade_date",
+    "dataset_id", "dataset_snapshot_sha256", "session_complete", "bars", "previous_closes"
+  ],
+  "properties": {
+    "contract_id": {"const": "simulated-market-day"},
+    "schema_version": {"const": "1.0.0"},
+    "execution_date": {"type": "string", "format": "date"},
+    "previous_trade_date": {"type": "string", "format": "date"},
+    "dataset_id": {"type": "string", "minLength": 3, "maxLength": 160},
+    "dataset_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "session_complete": {"const": true},
+    "bars": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["symbol", "open", "close"],
+        "properties": {
+          "symbol": {"$ref": "#/$defs/symbol"},
+          "open": {"type": "number", "exclusiveMinimum": 0},
+          "close": {"type": "number", "exclusiveMinimum": 0}
+        }
+      }
+    },
+    "previous_closes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["symbol", "close"],
+        "properties": {
+          "symbol": {"$ref": "#/$defs/symbol"},
+          "close": {"type": "number", "exclusiveMinimum": 0}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "symbol": {"type": "string", "pattern": "^[0-9]{6}\\.(SZ|SH|BJ)$"}
+  }
+}

@@ -1,66 +1,92 @@
-# ashare-pilot-next
+# A 股量化研究与模拟仓
 
-全新建设的A股研究与生产信号系统。本仓库不继承旧项目代码树，只允许经过审计的
-能力逐项迁入。
+`ashare-pilot-next` 是一个面向 A 股日频研究的后端项目。它将模型研究、正式信号和模拟资金账户分开，避免重新训练改写过去的模拟交易。
 
-## 当前状态
+系统不连接券商，不代表真实委托、成交或持仓。
 
-**架构骨架，不用于真实交易。**
-
-合成数据最小闭环已经验证到`Runtime Manifest`：输入文件内容只读取一次并构造
-不可变Dataset/Universe快照，合同、Champion、成本、市场规则、执行规则、组合
-风险和锁文件均绑定哈希；Signal Runner在输出前执行点时Universe与组合约束，并
-先提交不可变运行目录、再原子切换当前信号链头。Research的点时特征重放、
-Data Gateway的历史成员覆盖和交易日新鲜度均已用合成数据完成正反验证。测试专用
-参考策略只存在于测试代码，不属于正式策略，也不能
-参与晋级。生产入口不接受任意策略对象，只能加载Champion绑定且内容哈希通过的
-不可变适配器包。
-
-首个里程碑只验证一条可复现的最小链路：
+## 后端分层
 
 ```text
-固定测试数据
-  -> 点时Universe
-  -> 参考策略协议
-  -> 目标仓位
-  -> Production Signal
-  -> Runtime Manifest
-  -> Web只读合同
+不可变数据集
+    ├──> Research：滚动训练、样本外评价、候选模型
+    └──> Signal Runner：加载已激活模型，发布目标仓位
+                         └──> Sim Account：只向前更新现金、持仓和模拟交易
 ```
 
-本阶段不包含真实策略、供应商数据、历史报告、券商执行或生产部署。
+### 模型研究
 
-## 模块
+- 27 个横截面特征的滚动 GBDT 研究。
+- 每条未来收益标签记录实际成熟日。
+- 每次重训只使用 `label_end_date <= refit_date` 的样本。
+- 训练、验证和当前预测分开；未来标签不能改变已有预测。
+- 基本面数据按公告日加入特征，不使用报告期冒充可用日期。
 
-| 路径 | 责任 |
+### 模拟仓
+
+`apps/sim_account/` 是独立的只向前模拟账户：
+
+- 只消费 Signal Runner 已提交的 Production Signal。
+- 按信号序号逐次推进，拒绝重放、跳号和倒退。
+- 使用 `quant_core` 的 T+1、手数、涨跌停、停牌、滑点和交易费用语义。
+- 每日状态不可变，并与上一状态及来源信号的 SHA-256 绑定。
+- 停牌持仓使用明确的冻结估值，不会将市值记为零。
+
+## 目录
+
+| 路径 | 职责 |
 |---|---|
-| `packages/quant_core/` | Python金融语义、点时接口、成本、执行模拟、组合和策略协议 |
-| `apps/research/` | 实验、赛马、评估和晋级 |
-| `apps/signal_runner/` | 加载已晋级版本并生成目标仓位 |
-| `apps/web/` | 只读展示，禁止金融计算 |
-| `services/data_gateway/` | 供应商抓取、不可变数据集、质量证明和在线查询 |
-| `contracts/` | Schema、黄金样例和兼容规则 |
-| `ops/` | 编排、校验、发布和回滚 |
+| `packages/quant_core/` | 交易费用、市场规则、执行、持仓和状态机的唯一权威实现 |
+| `services/data_gateway/` | 数据采集、质量校验和不可变数据集发布 |
+| `apps/research/` | 特征、模型、样本外评价和候选模型晋级 |
+| `apps/signal_runner/` | 生成并原子发布目标仓位 |
+| `apps/sim_account/` | 持久化模拟资金账户 |
+| `contracts/` | 跨模块 JSON Schema 和示例 |
+| `tools/` | 校验工具和过渡期静态看板脚本 |
 
-## 权威说明
-
-- [架构入口](docs/architecture/README.md)
-- [合同总账](docs/architecture/CONTRACT_CATALOG.md)
-- [依赖方向](docs/architecture/DEPENDENCY_RULES.md)
-- [降级状态机](docs/architecture/STATE_MACHINE.md)
-- [迁移政策](docs/architecture/MIGRATION_POLICY.md)
-- [生产底座收口清单](docs/architecture/FOUNDATION_CLOSURE.md)
-- [实证能力重建记录](docs/architecture/EVIDENCE_REIMPLEMENTATION.md)
-- [首期验收标准](docs/architecture/ACCEPTANCE.md)
-
-## 本地验证
+## 本地安装与验证
 
 ```bash
-uv sync --all-packages --dev
+uv sync --locked --all-packages --dev
 uv run ruff check .
 uv run pytest
 uv run python tools/validate_contracts.py
 uv run python tools/check_boundaries.py
+uv run python tools/check_language.py
 ```
 
-所有命令必须能在没有旧仓库、没有供应商数据、没有本机绝对路径的全新目录运行。
+## 模拟仓命令
+
+`ashare-sim-account` 每次处理一个已提交信号，并原子更新对应账户的 `current-state.json`。
+
+```bash
+uv run ashare-sim-account \
+  --contracts-root contracts \
+  --signal-runs-root runtime/pilot/signal-runs \
+  --signal-head runtime/pilot/current-signal-head.json \
+  --signal-as-of 2026-08-17 \
+  --dataset-manifest runtime/pilot/dataset-manifest.json \
+  --dataset-root runtime/pilot/dataset \
+  --previous-trade-date 2026-08-17 \
+  --cost-model contracts/examples/cost-model.example.json \
+  --market-rules contracts/examples/market-rules.example.json \
+  --execution-policy contracts/examples/execution-policy.example.json \
+  --runtime-root runtime/pilot \
+  --account-id paper-main \
+  --execution-date 2026-08-18 \
+  --generated-at 2026-08-18T09:31:00+08:00 \
+  --initial-cash 1000000
+```
+
+## 当前过渡边界
+
+- `tools/update.py` 和 `runtime/dashboard/champion.json` 属于旧的静态看板链路，不是新模拟仓的账本。
+- 模型研究可以重算历史分析，但不能回写已生成信号或模拟仓交易。
+- Web 尚未迁移到新模拟仓合同，本阶段以后端正确性为主。
+
+## 架构文档
+
+- [架构入口](docs/architecture/README.md)
+- [合同目录](docs/architecture/CONTRACT_CATALOG.md)
+- [依赖边界](docs/architecture/DEPENDENCY_RULES.md)
+- [状态机](docs/architecture/STATE_MACHINE.md)
+- [更新说明](docs/UPDATE_RUNBOOK.md)

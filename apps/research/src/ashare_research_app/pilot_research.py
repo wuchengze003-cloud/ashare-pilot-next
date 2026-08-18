@@ -19,7 +19,7 @@ from ashare_quant_core import mark_to_market
 from .backtest import PilotConfig, run_walk_forward
 from .datasets import load_manifest, load_snapshot
 from .features import FEATURE_NAMES
-from .promotion import promote_baseline_model
+from .promotion import activate_champion, promote_baseline_model
 
 
 def _jsonable(value: object) -> object:
@@ -117,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--per-weight", type=float, default=0.2)
     parser.add_argument("--initial-capital", type=float, default=500000.0)
+    parser.add_argument(
+        "--activate",
+        action="store_true",
+        help="explicitly flip the active-champion pointer after promotion",
+    )
     args = parser.parse_args(argv)
 
     repository_root = Path(args.repository_root)
@@ -215,6 +220,15 @@ def main(argv: list[str] | None = None) -> int:
     temporary.write_text(json.dumps(research_report, ensure_ascii=True, indent=2) + "\n")
     temporary.replace(report_path)
 
+    activated = False
+    if args.activate:
+        activate_champion(
+            runtime_root=runtime_root,
+            champion_id=paths.champion_id,
+            activated_at=generated_at,
+        )
+        activated = True
+
     json.dump(
         {
             "as_of": as_of_text,
@@ -222,6 +236,9 @@ def main(argv: list[str] | None = None) -> int:
             "contracts_dir": str(paths.contracts_dir),
             "adapter_root": str(paths.adapter_root),
             "champion_path": str(paths.champion_path),
+            "champion_id": paths.champion_id,
+            "champion_sha256": paths.champion_sha256,
+            "activated": activated,
             "research_report": str(report_path),
             "validation_ic_mean": report.validation_ic_mean,
         },

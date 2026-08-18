@@ -1,0 +1,61 @@
+{
+  "contract_id": "simulated-account-state",
+  "schema_version": "1.0.0",
+  "state_id": "paper-main-2026-08-18-seq1",
+  "account_id": "paper-main",
+  "account_sequence": 1,
+  "as_of": "2026-08-18",
+  "generated_at": "2026-08-18T09:31:00+08:00",
+  "previous_state_sha256": null,
+  "source_signal": {
+    "signal_id": "pilot-2026-08-17-seq1",
+    "sequence": 1,
+    "state": "ACTIVE",
+    "as_of": "2026-08-17",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "initial_cash": 1000000,
+  "cash": 499495,
+  "market_value": 506000,
+  "total_assets": 1005495,
+  "nav": 1.005495,
+  "target_positions": [
+    {"symbol": "000001.SZ", "target_weight": 0.5}
+  ],
+  "holdings": [
+    {
+      "symbol": "000001.SZ",
+      "shares": 40000,
+      "locked_shares": 40000,
+      "avg_cost": 12.512625,
+      "last_price": 12.65,
+      "market_value": 506000,
+      "target_weight": 0.5,
+      "last_buy_date": "2026-08-18",
+      "valuation_frozen": false
+    }
+  ],
+  "trades": [
+    {
+      "trade_date": "2026-08-18",
+      "symbol": "000001.SZ",
+      "side": "buy",
+      "shares": 40000,
+      "price": 12.5,
+      "gross_amount": 500000,
+      "commission": 150,
+      "stamp_duty": 0,
+      "transfer_fee": 5,
+      "total_cost": 155,
+      "reason": "TARGET_REBALANCE"
+    }
+  ],
+  "skips": [],
+  "contract_set": {
+    "market_day_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "dataset_snapshot_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "cost_model_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "market_rules_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "execution_policy_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  }
+}

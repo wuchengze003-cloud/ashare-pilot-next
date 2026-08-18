@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/simulated-account-head/1.0.0",
+  "title": "Simulated Account Head",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id", "schema_version", "account_id", "account_sequence", "state_id",
+    "state_sha256", "previous_state_sha256", "as_of", "generated_at"
+  ],
+  "properties": {
+    "contract_id": {"const": "simulated-account-head"},
+    "schema_version": {"const": "1.0.0"},
+    "account_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,63}$"},
+    "account_sequence": {"type": "integer", "minimum": 1},
+    "state_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,159}$"},
+    "state_sha256": {"$ref": "#/$defs/sha256"},
+    "previous_state_sha256": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "as_of": {"type": "string", "format": "date"},
+    "generated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"account_sequence": {"const": 1}},
+        "required": ["account_sequence"]
+      },
+      "then": {"properties": {"previous_state_sha256": {"type": "null"}}},
+      "else": {"properties": {"previous_state_sha256": {"$ref": "#/$defs/sha256"}}}
+    }
+  ]
+}

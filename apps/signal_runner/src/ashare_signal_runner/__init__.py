@@ -11,6 +11,7 @@ from .runner import (
     canonical_json_bytes,
     canonical_json_sha256,
 )
+from .snapshots import load_dataset_snapshot
 
 __all__ = [
     "RunArtifacts",
@@ -19,5 +20,6 @@ __all__ = [
     "canonical_json_sha256",
     "load_committed_run",
     "load_current_run",
+    "load_dataset_snapshot",
     "publish_run",
 ]

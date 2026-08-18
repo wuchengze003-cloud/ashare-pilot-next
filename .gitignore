@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.workbuddy/
 .idea/
 .vscode/
 __pycache__/
@@ -24,6 +25,9 @@ data/normalized/
 runtime/
 artifacts/
 reports/
+docs/对话导出-*.md
+# Local one-off observer retained outside the repository.
+tools/probe_minute_freshness.py
 *.db
 *.sqlite
 *.sqlite3

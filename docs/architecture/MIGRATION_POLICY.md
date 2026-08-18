@@ -1,43 +1,50 @@
-# 旧能力迁入政策
+# Legacy Capability Migration Policy
 
-本仓库不做整目录复制。每项迁入都必须回答：
+This repository never copies whole directories. Every migration must answer:
 
-1. 当前生产目标是否确实需要该能力？
-2. 来源提交和许可证是什么？
-3. 是否包含旧策略、旧Universe、旧runtime或隐式数据源？
-4. 能否改写为当前合同和依赖方向？
-5. 有哪些防泄漏、重放、边界和失败测试？
-6. 删除Legacy目录后是否仍能独立运行？
+1. Does the current production goal actually need this capability?
+2. What is the source commit and license?
+3. Does it contain legacy strategies, legacy Universe, legacy runtime, or an
+   implicit data source?
+4. Can it be rewritten to the current contracts and dependency direction?
+5. What anti-leakage, replay, boundary, and failure tests exist?
+6. Can it still run independently after the Legacy directory is deleted?
 
-## 明确禁止首批迁入
+## Explicitly Forbidden in the First Migration
 
-- 旧TypeScript策略、回测和优化器。
-- 旧Dashboard和历史信号页面。
-- 旧规则、多策略和fallback。
-- 历史报告、回测明细、分钟需求全集和供应商导出。
-- 旧runtime、SQLite缓存、环境文件和部署状态。
+- Legacy TypeScript strategies, backtests, and optimizers.
+- Legacy Dashboard and historical signal pages.
+- Legacy rules, multi-strategy selection, and fallback.
+- Historical reports, backtest details, the full minute-frequency requirement
+  set, and vendor exports.
+- Legacy runtime, SQLite caches, environment files, and deployment state.
 
-旧项目中已有价值的点时过滤、退市股覆盖和重放测试，只能作为需求和测试证据，
-在新Python核心中重新实现并独立验收。
+The useful legacy point-in-time filtering, delisted-stock coverage, and replay
+tests may only serve as requirement and test evidence. They must be reimplemented
+and independently accepted in the new Python core.
 
-## 首批实证资产清单
+## First Evidence Asset List
 
-以下项目是迁移需求，不是可直接复制的代码：
+The following items are migration requirements, not directly copyable code:
 
-| 资产 | 旧基线证据 | 新仓库验收 |
+| Asset | Legacy baseline evidence | New-repository acceptance |
 |---|---|---|
-| 特征面板重放确定性 | `6536b56` | reviewed copy后，相同输入字节一致；删除点时过滤时攻击测试必须失败 |
-| 退市股和历史成分覆盖 | `535177d` | 重跑完整审计，不静默跳过；新审计数字由测试或manifest产生 |
-| 陈旧信号失败关闭 | `5421ec4` | 新鲜度门禁正反测试均通过；旧日期不得伪装为当前信号 |
+| Feature-panel replay determinism | `6536b56` | After a reviewed copy, identical inputs produce byte-identical outputs; the attack test must fail when point-in-time filtering is removed |
+| Delisted-stock and historical-member coverage | `535177d` | Rerun the full audit with no silent skipping; new audit numbers are produced by tests or a manifest |
+| Stale-signal fail-closed behavior | `5421ec4` | Both positive and negative freshness gates pass; an old date cannot masquerade as the current signal |
 
-迁移顺序必须是：读取来源提交和测试意图、在新合同下重新实现、运行正反测试、
-记录新证据。不得`cherry-pick`、复制旧报告、复制runtime或引用旧仓库路径。
+Migration order must be: read the source commit and test intent, reimplement
+under the new contracts, run positive and negative tests, and record new
+evidence. No `cherry-pick`, no copying legacy reports, no copying runtime, and
+no referencing legacy repository paths.
 
-三项资产全部在新仓库重新验收前，旧仓库保持冻结但不归档；完成后再打最终标签并
-设为只读。
+Until all three assets are re-accepted in the new repository, the legacy
+repository stays frozen but unarchived. After acceptance, apply the final tag
+and make it read-only.
 
-## 当前状态
+## Current Status
 
-三项资产已按当前合同和依赖方向独立重建，验证位置见
-`EVIDENCE_REIMPLEMENTATION.md`。本仓库没有迁入旧代码、旧报告、旧运行产物或旧
-审计数字。
+All three assets have been rebuilt independently under the current contracts and
+dependency direction; verification locations are in
+`EVIDENCE_REIMPLEMENTATION.md`. This repository contains no migrated legacy code,
+legacy reports, legacy runtime artifacts, or legacy audit numbers.
