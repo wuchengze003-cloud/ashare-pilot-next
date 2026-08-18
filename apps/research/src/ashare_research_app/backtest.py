@@ -277,6 +277,32 @@ def _causal_equal_weight_market_returns(
     )
 
 
+def _select_mature_training_labels(
+    *,
+    raw_labels: np.ndarray,
+    label_end_ordinals: np.ndarray,
+    feature_date_ordinals: np.ndarray,
+    cutoff_ordinal: int,
+    label_transform: str,
+    training_lookback_days: int | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Select and transform only outcomes actually observable at the cutoff."""
+    mature = (label_end_ordinals >= 0) & (label_end_ordinals <= cutoff_ordinal)
+    if training_lookback_days is not None and mature.any():
+        mature_feature_dates = np.unique(feature_date_ordinals[mature])
+        if len(mature_feature_dates) > training_lookback_days:
+            earliest = mature_feature_dates[-training_lookback_days]
+            mature &= feature_date_ordinals >= earliest
+    transformed = raw_labels.copy()
+    if label_transform == "cross_sectional_demean":
+        for feature_date in np.unique(feature_date_ordinals[mature]):
+            cross_section = mature & (feature_date_ordinals == feature_date)
+            transformed[cross_section] -= float(transformed[cross_section].mean())
+    elif label_transform != "raw":
+        raise ValueError(f"unsupported label_transform: {label_transform}")
+    return np.where(mature, transformed, np.nan), mature
+
+
 def run_walk_forward(
     snapshot: DatasetSnapshot,
     *,
@@ -382,39 +408,19 @@ def run_walk_forward(
                 continue
             label_values[horizon][position] = realized
             label_end_ordinals[horizon][position] = end_date.toordinal()
-    if cfg.label_transform == "cross_sectional_demean":
-        positions_by_date: dict[date, list[int]] = {}
-        for position, row in enumerate(ordered_panel):
-            positions_by_date.setdefault(row.trade_date, []).append(position)
-        for horizon in horizons:
-            for positions in positions_by_date.values():
-                available = [
-                    position
-                    for position in positions
-                    if math.isfinite(float(label_values[horizon][position]))
-                ]
-                if not available:
-                    continue
-                mean_label = float(label_values[horizon][available].mean())
-                label_values[horizon][available] -= mean_label
-
     def fit_mature_model(*, cutoff: date) -> tuple[MultiHorizonModel, date]:
         """Fit only labels whose symbol-specific outcome is known by cutoff."""
         cutoff_ordinal = cutoff.toordinal()
         mature_labels: dict[int, np.ndarray] = {}
         included_label_ends: list[int] = []
         for horizon in horizons:
-            mature = (
-                (label_end_ordinals[horizon] >= 0)
-                & (label_end_ordinals[horizon] <= cutoff_ordinal)
-            )
-            if cfg.training_lookback_days is not None and mature.any():
-                mature_feature_dates = np.unique(feature_date_ordinals[mature])
-                if len(mature_feature_dates) > cfg.training_lookback_days:
-                    earliest = mature_feature_dates[-cfg.training_lookback_days]
-                    mature &= feature_date_ordinals >= earliest
-            mature_labels[horizon] = np.where(
-                mature, label_values[horizon], np.nan
+            mature_labels[horizon], mature = _select_mature_training_labels(
+                raw_labels=label_values[horizon],
+                label_end_ordinals=label_end_ordinals[horizon],
+                feature_date_ordinals=feature_date_ordinals,
+                cutoff_ordinal=cutoff_ordinal,
+                label_transform=cfg.label_transform,
+                training_lookback_days=cfg.training_lookback_days,
             )
             included_label_ends.extend(label_end_ordinals[horizon][mature].tolist())
         if not included_label_ends:

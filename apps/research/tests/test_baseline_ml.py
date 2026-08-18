@@ -12,7 +12,11 @@ from ashare_quant_core import (
     DailyBar,
     DatasetSnapshot,
 )
-from ashare_research_app.backtest import PilotConfig, run_walk_forward
+from ashare_research_app.backtest import (
+    PilotConfig,
+    _select_mature_training_labels,
+    run_walk_forward,
+)
 from ashare_research_app.baseline_model import MODEL_KINDS, MultiHorizonModel, TrainingWindow
 from ashare_research_app.features import (
     FEATURE_NAMES,
@@ -151,6 +155,23 @@ def test_future_rows_do_not_change_historical_features() -> None:
     panel_extended = build_feature_panel(extended, as_of=baseline.as_of)
 
     assert panel_extended == panel_baseline
+
+
+def test_cross_sectional_label_transform_excludes_unmatured_suspended_name() -> None:
+    np = __import__("numpy")
+    transformed, mature = _select_mature_training_labels(
+        raw_labels=np.asarray([0.10, 9.90, 0.20], dtype=float),
+        label_end_ordinals=np.asarray([10, 20, 10], dtype=np.int64),
+        feature_date_ordinals=np.asarray([1, 1, 2], dtype=np.int64),
+        cutoff_ordinal=10,
+        label_transform="cross_sectional_demean",
+        training_lookback_days=None,
+    )
+
+    assert mature.tolist() == [True, False, True]
+    assert transformed[0] == pytest.approx(0.0)
+    assert transformed[1] != transformed[1]
+    assert transformed[2] == pytest.approx(0.0)
 
 
 def test_cross_sectional_rank_features_are_centered_and_causal() -> None:
