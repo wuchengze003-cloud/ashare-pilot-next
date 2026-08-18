@@ -86,6 +86,7 @@ def build_research_report(report, *, initial_capital) -> dict:
         "validation_cutoff": report.validation_end.isoformat(),
         "validation_ic_mean": report.validation_ic_mean,
         "score_orientation": report.score_orientation,
+        "model_kind": report.model_kind,
         "top_k": report.top_k,
         "per_weight": report.per_weight,
         "rebalance_interval": report.rebalance_interval,
@@ -136,7 +137,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--generated-at", required=True)
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--per-weight", type=float, default=0.2)
-    parser.add_argument("--initial-capital", type=float, default=500000.0)
+    parser.add_argument("--initial-capital", type=float, default=1000000.0)
+    parser.add_argument(
+        "--model-kind",
+        choices=("ridge", "hist_gradient_boosting", "extra_trees"),
+        default="hist_gradient_boosting",
+    )
     args = parser.parse_args(argv)
 
     repository_root = Path(args.repository_root)
@@ -213,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         initial_capital=Decimal(str(args.initial_capital)),
         top_k=args.top_k,
         per_weight=args.per_weight,
+        model_kind=args.model_kind,
     )
     model, production_model, report = run_walk_forward(
         snapshot,

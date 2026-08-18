@@ -13,7 +13,7 @@ from ashare_quant_core import (
     DatasetSnapshot,
 )
 from ashare_research_app.backtest import PilotConfig, run_walk_forward
-from ashare_research_app.baseline_model import MultiHorizonModel
+from ashare_research_app.baseline_model import MODEL_KINDS, MultiHorizonModel
 from ashare_research_app.features import (
     FEATURE_NAMES,
     build_feature_panel,
@@ -231,6 +231,25 @@ def test_model_bundle_roundtrip_preserves_scores() -> None:
     )
     assert restored.score(matrix).tolist() == model.score(matrix).tolist()
     assert report.training_cutoff == model.training_cutoff
+
+
+@pytest.mark.parametrize("model_kind", MODEL_KINDS)
+def test_registered_sklearn_models_run_through_one_backtest(model_kind: str) -> None:
+    snapshot = synthetic_snapshot()
+    documents = contract_documents()
+    model, _production, report = run_walk_forward(
+        snapshot,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(top_k=4, per_weight=0.24, model_kind=model_kind),
+    )
+
+    assert report.model_kind == model_kind
+    assert model.model_kind == model_kind
+    restored = MultiHorizonModel.from_bundle_bytes(model.bundle_bytes())
+    assert restored.model_kind == model_kind
 
 
 def test_walk_forward_rejects_tiny_history() -> None:

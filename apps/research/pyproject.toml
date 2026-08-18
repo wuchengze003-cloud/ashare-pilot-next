@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Experiment, race, evaluation, and promotion application"
 requires-python = ">=3.11"
 dependencies = [
+    "arch>=8.0,<9",
     "ashare-quant-core",
     "numpy>=2.0,<3",
     "pandas>=2.0,<3",
@@ -14,6 +15,7 @@ dependencies = [
 [project.scripts]
 ashare-research-run = "ashare_research_app.pilot_research:main"
 ashare-champion-activate = "ashare_research_app.activate:main"
+ashare-model-race = "ashare_research_app.model_race:main"
 
 [tool.uv.sources]
 ashare-quant-core = {workspace = true}

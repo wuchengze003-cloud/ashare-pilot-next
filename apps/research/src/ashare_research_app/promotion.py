@@ -33,6 +33,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from .backtest import BacktestReport
 from .features import MIN_OBSERVATIONS, _return, compute_feature_row
+from .performance import annualized_sharpe, returns_from_nav_curve
 
 ADAPTER_ID = "ml-baseline-adapter/v1"
 STRATEGY_ID = "ml-baseline"
@@ -278,14 +279,7 @@ def evaluate_promotion_gate(
     report: BacktestReport,
     gate: Mapping[str, Any],
 ) -> dict[str, Any]:
-    navs = [float(point["nav"]) for point in report.nav_curve]
-    returns = [navs[index] / navs[index - 1] - 1.0 for index in range(1, len(navs))]
-    if len(returns) >= 2:
-        mean = sum(returns) / len(returns)
-        variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)
-        sharpe = mean / math.sqrt(variance) * math.sqrt(252) if variance > 0 else 0.0
-    else:
-        sharpe = 0.0
+    sharpe = annualized_sharpe(returns_from_nav_curve(report.nav_curve))
 
     positions: dict[str, tuple[int, float]] = {}
     realized_profits: list[float] = []
@@ -498,6 +492,7 @@ def promote_baseline_model(
         "test_end": report.test_end.isoformat(),
         "validation_ic_mean": report.validation_ic_mean,
         "score_orientation": report.score_orientation,
+        "model_kind": report.model_kind,
         "top_k": report.top_k,
         "per_weight": report.per_weight,
         "rebalance_interval": report.rebalance_interval,

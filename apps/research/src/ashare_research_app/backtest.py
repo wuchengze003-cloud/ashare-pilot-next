@@ -30,7 +30,7 @@ from ashare_quant_core import (
     settle_t_plus_one,
 )
 
-from .baseline_model import DEFAULT_HORIZONS, MultiHorizonModel
+from .baseline_model import DEFAULT_HORIZONS, MODEL_KINDS, MultiHorizonModel
 from .features import FEATURE_NAMES, FeatureRow, build_feature_panel, forward_return_label
 
 LABEL_HORIZON_FOR_VALIDATION = 5
@@ -38,11 +38,12 @@ LABEL_HORIZON_FOR_VALIDATION = 5
 
 @dataclass(frozen=True)
 class PilotConfig:
-    initial_capital: Decimal = Decimal("500000")
+    initial_capital: Decimal = Decimal("1000000")
     top_k: int = 5
     per_weight: float = 0.2
     rebalance_interval: int = 5
     model_refit_interval: int = 20
+    model_kind: str = "hist_gradient_boosting"
 
     def __post_init__(self) -> None:
         if self.initial_capital <= 0:
@@ -55,6 +56,8 @@ class PilotConfig:
             raise ValueError("rebalance_interval must be positive")
         if self.model_refit_interval < 1:
             raise ValueError("model_refit_interval must be positive")
+        if self.model_kind not in MODEL_KINDS:
+            raise ValueError(f"unsupported model_kind: {self.model_kind}")
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,7 @@ class BacktestReport:
     frozen_valuations: tuple[str, ...]
     validation_ic_mean: float
     score_orientation: int
+    model_kind: str
     top_k: int
     per_weight: float
     rebalance_interval: int
@@ -311,7 +315,7 @@ def run_walk_forward(
             included_label_ends.extend(label_end_ordinals[horizon][mature].tolist())
         if not included_label_ends:
             raise ValueError("no mature training labels available")
-        fitted = MultiHorizonModel(horizons=horizons)
+        fitted = MultiHorizonModel(horizons=horizons, model_kind=cfg.model_kind)
         fitted.fit(feature_matrix, mature_labels, training_cutoff=cutoff)
         return fitted, date.fromordinal(max(included_label_ends))
 
@@ -791,6 +795,7 @@ def run_walk_forward(
         frozen_valuations=frozen_valuations,
         validation_ic_mean=validation_ic_mean,
         score_orientation=score_orientation,
+        model_kind=cfg.model_kind,
         top_k=cfg.top_k,
         per_weight=cfg.per_weight,
         rebalance_interval=cfg.rebalance_interval,
