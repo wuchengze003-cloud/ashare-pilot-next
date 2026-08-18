@@ -61,23 +61,22 @@ MAX_TRACKED_FILE_BYTES = 1_000_000
 
 INTERNAL_IMPORTS = {
     "ashare_data_gateway",
-    "ashare_obs",
     "ashare_quant_core",
     "ashare_research_app",
     "ashare_sim_account",
     "ashare_signal_runner",
+    "ashare_web",
 }
 INTERNAL_DISTRIBUTIONS = {
     "ashare-data-gateway",
-    "ashare-obs",
     "ashare-quant-core",
     "ashare-research-app",
     "ashare-sim-account",
     "ashare-signal-runner",
+    "ashare-web",
 }
 ALLOWED_INTERNAL_IMPORTS = {
     "packages/quant_core": {"ashare_quant_core"},
-    "packages/obs": {"ashare_obs"},
     "services/data_gateway": {"ashare_data_gateway"},
     "apps/research": {"ashare_quant_core", "ashare_research_app"},
     "apps/sim_account": {
@@ -86,18 +85,18 @@ ALLOWED_INTERNAL_IMPORTS = {
         "ashare_sim_account",
     },
     "apps/signal_runner": {"ashare_quant_core", "ashare_signal_runner"},
-    "apps/web": set(),
+    "apps/web": {"ashare_signal_runner", "ashare_web"},
     "ops": set(),
     "tools": set(),
 }
 ALLOWED_INTERNAL_DISTRIBUTIONS = {
     ".": set(),
     "packages/quant_core": set(),
-    "packages/obs": set(),
     "services/data_gateway": set(),
     "apps/research": {"ashare-quant-core"},
     "apps/sim_account": {"ashare-quant-core", "ashare-signal-runner"},
     "apps/signal_runner": {"ashare-quant-core"},
+    "apps/web": {"ashare-signal-runner"},
 }
 CURRENT_TIME_CALLS = {
     "arrow.now",

@@ -35,9 +35,19 @@ def permissive_promotion_gate() -> dict:
         "maximum_drawdown": 1.0,
         "minimum_trades": 1,
         "minimum_sharpe": -100.0,
+        "minimum_validation_ic": -1.0,
         "maximum_top_trade_profit_share": 1.0,
         "require_untouched_final_window": True,
     }
+
+
+def synthetic_universe(snapshot: DatasetSnapshot, manifest: dict, generated_at: datetime) -> dict:
+    return promotion.build_universe_document(
+        symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
+        as_of=snapshot.as_of.isoformat(),
+        generated_at=generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        dataset_manifest=manifest,
+    )
 
 
 def trading_days(start: date, count: int) -> list[date]:
@@ -261,6 +271,7 @@ def test_promotion_feeds_live_signal_chain(tmp_path: Path) -> None:
         report=report,
         dataset_manifest=manifest,
         snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
+        universe_document=synthetic_universe(snapshot, manifest, promoted_at),
         as_of=snapshot.as_of.isoformat(),
         generated_at=promoted_at,
         top_k=4,
@@ -317,6 +328,7 @@ def test_promotion_report_binds_leak_checks(tmp_path: Path) -> None:
         portfolio_risk_doc=documents["portfolio-risk"],
         config=PilotConfig(top_k=4, per_weight=0.24),
     )
+    promoted_at = datetime(2026, 8, 4, 1, 0, tzinfo=UTC)
     paths = promotion.promote_baseline_model(
         repository_root=ROOT,
         runtime_root=tmp_path / "runtime",
@@ -324,8 +336,9 @@ def test_promotion_report_binds_leak_checks(tmp_path: Path) -> None:
         report=report,
         dataset_manifest=manifest,
         snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
+        universe_document=synthetic_universe(snapshot, manifest, promoted_at),
         as_of=snapshot.as_of.isoformat(),
-        generated_at=datetime(2026, 8, 4, 1, 0, tzinfo=UTC),
+        generated_at=promoted_at,
         top_k=4,
         per_weight=0.24,
         feature_names=FEATURE_NAMES,
@@ -346,7 +359,8 @@ def test_promotion_report_binds_leak_checks(tmp_path: Path) -> None:
     assert paths.promotion_report_path.parent == paths.package_dir
     assert promotion_report["promotion_gate_evaluation"]["status"] == "pass"
     adapter_source = next(paths.adapter_root.rglob("adapter.py")).read_text(encoding="utf-8")
-    assert "ordered[-1].trade_date != as_of" in adapter_source
+    assert "ordered[-1].trade_date != rebalance_date" in adapter_source
+    assert "rebalance_interval" in adapter_source
 
 
 def test_promotion_rejects_failed_gate_before_writing_a_package(tmp_path: Path) -> None:
@@ -366,6 +380,7 @@ def test_promotion_rejects_failed_gate_before_writing_a_package(tmp_path: Path) 
         metrics={**report.metrics, "max_drawdown": 2.0},
     )
     runtime_root = tmp_path / "runtime"
+    promoted_at = datetime(2026, 8, 4, 1, 0, tzinfo=UTC)
 
     with pytest.raises(promotion.ChampionPackageError, match="promotion gate failed"):
         promotion.promote_baseline_model(
@@ -375,8 +390,9 @@ def test_promotion_rejects_failed_gate_before_writing_a_package(tmp_path: Path) 
             report=failed_report,
             dataset_manifest=manifest,
             snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
+            universe_document=synthetic_universe(snapshot, manifest, promoted_at),
             as_of=snapshot.as_of.isoformat(),
-            generated_at=datetime(2026, 8, 4, 1, 0, tzinfo=UTC),
+            generated_at=promoted_at,
             top_k=4,
             per_weight=0.24,
             feature_names=FEATURE_NAMES,
@@ -400,6 +416,7 @@ def test_promotion_rejects_bundle_not_bound_to_backtest(tmp_path: Path) -> None:
     )
 
     with pytest.raises(promotion.ChampionPackageError, match="model bundle"):
+        promoted_at = datetime(2026, 8, 4, 1, 0, tzinfo=UTC)
         promotion.promote_baseline_model(
             repository_root=ROOT,
             runtime_root=tmp_path / "runtime",
@@ -407,8 +424,9 @@ def test_promotion_rejects_bundle_not_bound_to_backtest(tmp_path: Path) -> None:
             report=report,
             dataset_manifest=manifest,
             snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
+            universe_document=synthetic_universe(snapshot, manifest, promoted_at),
             as_of=snapshot.as_of.isoformat(),
-            generated_at=datetime(2026, 8, 4, 1, 0, tzinfo=UTC),
+            generated_at=promoted_at,
             top_k=4,
             per_weight=0.24,
             feature_names=FEATURE_NAMES,

@@ -360,11 +360,16 @@ def test_runner_validates_output_against_schema() -> None:
 
 def test_active_champion_pointer_rejects_path_escape(tmp_path: Path) -> None:
     pointer = {
+        "contract_id": "active-champion",
+        "schema_version": "1.0.0",
         "pointer_id": "active-champion/v1",
+        "activation_id": "activation-0123456789abcdef0123",
         "champion_id": "../../outside",
         "champion_sha256": "a" * 64,
         "receipt_sha256": "b" * 64,
+        "approval_id": "test-human-approval",
         "activated_at": "2026-08-04T01:00:00Z",
+        "previous_champion_id": None,
         "promotion_id": "promo-fixture",
     }
     pointer_path = tmp_path / "active-champion.json"

@@ -1,49 +1,54 @@
 # A 股量化研究与模拟仓
 
-`ashare-pilot-next` 是一个面向 A 股日频研究的后端项目。它将模型研究、正式信号和模拟资金账户分开，避免重新训练改写过去的模拟交易。
+`ashare-pilot-next` 是一个日频 A 股量化后端。数据、模型研究、生产信号、模拟账户和
+Web 发布彼此隔离，所有市场日期都是显式输入。
 
-系统不连接券商，不代表真实委托、成交或持仓。
+本项目不连接券商，不产生真实委托，不宣称真实成交或持仓。
 
-## 后端分层
+## 系统边界
 
 ```text
-不可变数据集
-    ├──> Research：滚动训练、样本外评价、候选模型
-    └──> Signal Runner：加载已激活模型，发布目标仓位
-                         └──> Sim Account：只向前更新现金、持仓和模拟交易
+Data Gateway：采集、校验、发布不可变数据集
+        │
+        ├── Research：训练、样本外回测、Promotion Gate、候选 Champion
+        │                                      │ 人工确认后激活
+        └── Signal Runner：加载已激活 Champion，发布目标仓位
+                                               │
+                                               └── Sim Account：下一交易日模拟执行
+                                                                    │
+                                                                    └── Web：只读静态发布
 ```
 
-### 模型研究
+`packages/quant_core/` 是费用、T+1、手数、涨跌停、停牌、持仓和估值语义的唯一实现。
 
-- 27 个横截面特征的滚动 GBDT 研究。
-- 每条未来收益标签记录实际成熟日。
-- 每次重训只使用 `label_end_date <= refit_date` 的样本。
-- 训练、验证和当前预测分开；未来标签不能改变已有预测。
-- 基本面数据按公告日加入特征，不使用报告期冒充可用日期。
+## 无泄漏训练
 
-### 模拟仓
+当前基线使用 9 个价量特征，分别预测 1、3、5 个有效交易数据后的收益。
 
-`apps/sim_account/` 是独立的只向前模拟账户：
+- 标签成熟日按每只股票自己的有效行计算，停牌不会被全市场日历误判。
+- 训练只接收标签成熟日不晚于当次截止日的样本。
+- 验证集只用于选择评分方向，进入样本外阶段后不再改方向或调参。
+- 样本外回测每 20 个交易日扩窗重训；每次只使用上一交易日前已成熟的标签。
+- 生产模型在当前安全截止日重新拟合，但它不参与历史绩效计算。
+- 目标组合每 5 个交易日再平衡，回测和生产适配器使用同一规则。
 
-- 只消费 Signal Runner 已提交的 Production Signal。
-- 按信号序号逐次推进，拒绝重放、跳号和倒退。
-- 使用 `quant_core` 的 T+1、手数、涨跌停、停牌、滑点和交易费用语义。
-- 每日状态不可变，并与上一状态及来源信号的 SHA-256 绑定。
-- 停牌持仓使用明确的冻结估值，不会将市值记为零。
+当前正式基线不使用基本面特征。在“公告日”未被写入不可变数据契约并通过时点
+校验前，报告期、股东户数等字段不能进入候选 Champion。
 
 ## 目录
 
 | 路径 | 职责 |
 |---|---|
-| `packages/quant_core/` | 交易费用、市场规则、执行、持仓和状态机的唯一权威实现 |
-| `services/data_gateway/` | 数据采集、质量校验和不可变数据集发布 |
-| `apps/research/` | 特征、模型、样本外评价和候选模型晋级 |
-| `apps/signal_runner/` | 生成并原子发布目标仓位 |
-| `apps/sim_account/` | 持久化模拟资金账户 |
+| `services/data_gateway/` | 数据采集、质量门和内容寻址发布 |
+| `apps/research/` | 特征、模型、样本外回测、Promotion Gate 和 Champion 包 |
+| `apps/signal_runner/` | 生产状态机和目标仓位发布 |
+| `apps/sim_account/` | 只向前的模拟资金账户 |
+| `apps/web/` | 已提交信号和模拟账户的只读发布 |
+| `packages/quant_core/` | 金融语义唯一权威 |
 | `contracts/` | 跨模块 JSON Schema 和示例 |
-| `tools/` | 校验工具和过渡期静态看板脚本 |
+| `tools/` | 仓库边界、契约和语言校验 |
 
-## 本地安装与验证
+## 安装与校验
 
 ```bash
 uv sync --locked --all-packages --dev
@@ -54,39 +59,20 @@ uv run python tools/check_boundaries.py
 uv run python tools/check_language.py
 ```
 
-## 模拟仓命令
+## 日常流程
 
-`ashare-sim-account` 每次处理一个已提交信号，并原子更新对应账户的 `current-state.json`。
+数据发布、研究、人工激活、信号、模拟仓和 Web 发布的完整命令见
+[`更新运行手册`](docs/UPDATE_RUNBOOK.md)。日常数据更新不会自动训练或激活模型。
 
-```bash
-uv run ashare-sim-account \
-  --contracts-root contracts \
-  --signal-runs-root runtime/pilot/signal-runs \
-  --signal-head runtime/pilot/current-signal-head.json \
-  --signal-as-of 2026-08-17 \
-  --dataset-manifest runtime/pilot/dataset-manifest.json \
-  --dataset-root runtime/pilot/dataset \
-  --previous-trade-date 2026-08-17 \
-  --cost-model contracts/examples/cost-model.example.json \
-  --market-rules contracts/examples/market-rules.example.json \
-  --execution-policy contracts/examples/execution-policy.example.json \
-  --runtime-root runtime/pilot \
-  --account-id paper-main \
-  --execution-date 2026-08-18 \
-  --generated-at 2026-08-18T09:31:00+08:00 \
-  --initial-cash 1000000
-```
+## 当前绩效口径
 
-## 当前过渡边界
-
-- `tools/update.py` 和 `runtime/dashboard/champion.json` 属于旧的静态看板链路，不是新模拟仓的账本。
-- 模型研究可以重算历史分析，但不能回写已生成信号或模拟仓交易。
-- Web 尚未迁移到新模拟仓合同，本阶段以后端正确性为主。
+旧静态看板中的收益率、Sharpe、回撤和“当前持仓”已作废，不再是本项目的有效结论。
+仓库不跟踪运行数据和历史报告；每次研究结论以具体不可变数据集和 Promotion Gate
+报告为准。
 
 ## 架构文档
 
 - [架构入口](docs/architecture/README.md)
-- [合同目录](docs/architecture/CONTRACT_CATALOG.md)
+- [契约目录](docs/architecture/CONTRACT_CATALOG.md)
 - [依赖边界](docs/architecture/DEPENDENCY_RULES.md)
 - [状态机](docs/architecture/STATE_MACHINE.md)
-- [更新说明](docs/UPDATE_RUNBOOK.md)

@@ -133,10 +133,22 @@
       "examples": ["examples/simulated-account-head.example.json"]
     },
     {
-      "contract_id": "web-state",
+      "contract_id": "static-web-release",
       "schema_version": "1.0.0",
-      "schema": "schemas/web-state.schema.json",
-      "examples": ["examples/web-state.example.json"]
+      "schema": "schemas/static-web-release.schema.json",
+      "examples": ["examples/static-web-release.example.json"]
+    },
+    {
+      "contract_id": "champion-activation",
+      "schema_version": "1.0.0",
+      "schema": "schemas/champion-activation.schema.json",
+      "examples": ["examples/champion-activation.example.json"]
+    },
+    {
+      "contract_id": "active-champion",
+      "schema_version": "1.0.0",
+      "schema": "schemas/active-champion.schema.json",
+      "examples": ["examples/active-champion.example.json"]
     }
   ]
 }

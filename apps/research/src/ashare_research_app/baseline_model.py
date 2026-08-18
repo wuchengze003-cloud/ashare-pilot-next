@@ -17,7 +17,7 @@ import sklearn
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 DEFAULT_HORIZONS: tuple[int, ...] = (1, 3, 5)
-MODEL_CODE_VERSION = "baseline-hgb/v1"
+MODEL_CODE_VERSION = "baseline-hgb/v2"
 RANDOM_STATE = 20260804
 
 
@@ -47,6 +47,13 @@ class MultiHorizonModel:
         self.horizons = tuple(sorted(horizons))
         self.models: dict[int, HistGradientBoostingRegressor] = {}
         self.training_cutoff: date | None = None
+        self.orientation = 1
+
+    def set_orientation(self, orientation: int) -> None:
+        """Freeze validation-selected ranking direction into the model bundle."""
+        if orientation not in {-1, 1}:
+            raise ValueError("score orientation must be -1 or 1")
+        self.orientation = orientation
 
     def fit(
         self,
@@ -84,7 +91,7 @@ class MultiHorizonModel:
         predictions = np.column_stack(
             [self.models[horizon].predict(feature_matrix) for horizon in self.horizons]
         )
-        return predictions.mean(axis=1)
+        return predictions.mean(axis=1) * self.orientation
 
     def bundle_bytes(self) -> bytes:
         if not self.models or self.training_cutoff is None:
@@ -93,6 +100,7 @@ class MultiHorizonModel:
             "code_version": MODEL_CODE_VERSION,
             "horizons": list(self.horizons),
             "training_cutoff": self.training_cutoff.isoformat(),
+            "orientation": self.orientation,
             "sklearn_version": sklearn.__version__,
             "numpy_version": np.__version__,
             "models": {horizon: self.models[horizon] for horizon in self.horizons},
@@ -117,6 +125,7 @@ class MultiHorizonModel:
         model = MultiHorizonModel(horizons=tuple(bundle["horizons"]))
         model.models = dict(bundle["models"])
         model.training_cutoff = date.fromisoformat(bundle["training_cutoff"])
+        model.set_orientation(int(bundle["orientation"]))
         return model
 
     @staticmethod

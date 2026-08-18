@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/champion-activation/1.0.0",
+  "title": "Champion Activation Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id", "schema_version", "activation_id", "champion_id",
+    "champion_sha256", "approval_id", "activated_at", "previous_champion_id",
+    "pointer_sha256"
+  ],
+  "properties": {
+    "contract_id": {"const": "champion-activation"},
+    "schema_version": {"const": "1.0.0"},
+    "activation_id": {"type": "string", "pattern": "^activation-[a-f0-9]{20}$"},
+    "champion_id": {"type": "string", "pattern": "^champ-[a-f0-9]{20}$"},
+    "champion_sha256": {"$ref": "#/$defs/sha256"},
+    "approval_id": {"type": "string", "minLength": 1, "maxLength": 120},
+    "activated_at": {"type": "string", "format": "date-time"},
+    "previous_champion_id": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^champ-[a-f0-9]{20}$"}
+      ]
+    },
+    "pointer_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

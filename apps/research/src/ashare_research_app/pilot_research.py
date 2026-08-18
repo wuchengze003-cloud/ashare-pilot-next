@@ -1,8 +1,8 @@
 """Public command: run the pilot research cycle on one immutable dataset.
 
 Loads the dataset snapshot, runs the walk-forward backtest, promotes the
-trained baseline model, and writes a research report for the web-state
-producer. All outputs live under an explicit runtime root.
+trained baseline model, and writes an immutable candidate package only after
+the Promotion Gate passes. All outputs live under an explicit runtime root.
 """
 
 from __future__ import annotations
@@ -19,7 +19,9 @@ from ashare_quant_core import mark_to_market
 from .backtest import PilotConfig, run_walk_forward
 from .datasets import load_manifest, load_snapshot
 from .features import FEATURE_NAMES
-from .promotion import activate_champion, promote_baseline_model
+from .promotion import evaluate_promotion_gate, promote_baseline_model
+
+EXIT_PROMOTION_GATE_FAILED = 3
 
 
 def _jsonable(value: object) -> object:
@@ -83,6 +85,13 @@ def build_research_report(report, *, initial_capital) -> dict:
         "training_cutoff": report.training_cutoff.isoformat(),
         "validation_cutoff": report.validation_end.isoformat(),
         "validation_ic_mean": report.validation_ic_mean,
+        "score_orientation": report.score_orientation,
+        "top_k": report.top_k,
+        "per_weight": report.per_weight,
+        "rebalance_interval": report.rebalance_interval,
+        "model_refit_interval": report.model_refit_interval,
+        "oos_refit_count": report.oos_refit_count,
+        "oos_max_label_end": report.oos_max_label_end.isoformat(),
         "train_end": report.train_end.isoformat(),
         "test_start": report.test_start.isoformat(),
         "test_end": report.test_end.isoformat(),
@@ -121,28 +130,37 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the pilot research cycle")
     parser.add_argument("--dataset-manifest", required=True)
     parser.add_argument("--dataset-root", required=True)
+    parser.add_argument("--universe", required=True)
     parser.add_argument("--repository-root", required=True)
     parser.add_argument("--runtime-root", required=True)
     parser.add_argument("--generated-at", required=True)
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--per-weight", type=float, default=0.2)
     parser.add_argument("--initial-capital", type=float, default=500000.0)
-    parser.add_argument(
-        "--activate",
-        action="store_true",
-        help="explicitly flip the active-champion pointer after promotion",
-    )
     args = parser.parse_args(argv)
 
     repository_root = Path(args.repository_root)
     runtime_root = Path(args.runtime_root)
     manifest = load_manifest(Path(args.dataset_manifest))
+    universe = json.loads(Path(args.universe).read_text(encoding="utf-8"))
+    universe_schema = json.loads(
+        (repository_root / "contracts/schemas/universe.schema.json").read_text(encoding="utf-8")
+    )
+    from jsonschema import Draft202012Validator, FormatChecker
+
+    Draft202012Validator(universe_schema, format_checker=FormatChecker()).validate(universe)
     as_of_text = str(manifest["as_of"])
     snapshot = load_snapshot(
         manifest=manifest,
         dataset_root=Path(args.dataset_root),
         as_of=datetime.strptime(as_of_text, "%Y-%m-%d").date(),
     )
+    snapshot_symbols = tuple(sorted({bar.symbol for bar in snapshot.records}))
+    universe_symbols = tuple(sorted(str(member["symbol"]) for member in universe["members"]))
+    if universe_symbols != snapshot_symbols:
+        raise ValueError("research universe members do not match the immutable dataset")
+    if str(universe["as_of"]) != as_of_text:
+        raise ValueError("research universe as_of does not match the dataset")
 
     cost_model_path = repository_root / "contracts/examples/cost-model.example.json"
     cost_model_doc = json.loads(cost_model_path.read_text(encoding="utf-8"))
@@ -207,20 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     generated_at = datetime.fromisoformat(args.generated_at.replace("Z", "+00:00"))
     if generated_at.tzinfo is None:
         generated_at = generated_at.replace(tzinfo=UTC)
-    paths = promote_baseline_model(
-        repository_root=repository_root,
-        runtime_root=runtime_root,
-        model_bundle_bytes=production_model.bundle_bytes(),
-        report=report,
-        dataset_manifest=manifest,
-        snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
-        as_of=as_of_text,
-        generated_at=generated_at,
-        top_k=args.top_k,
-        per_weight=args.per_weight,
-        feature_names=FEATURE_NAMES,
-        promotion_gate=promotion_gate_doc,
-    )
+    gate_evaluation = evaluate_promotion_gate(report, promotion_gate_doc)
 
     runtime_root.mkdir(parents=True, exist_ok=True)
     research_report = build_research_report(report, initial_capital=config.initial_capital)
@@ -231,19 +236,49 @@ def main(argv: list[str] | None = None) -> int:
     research_report["scores_latest"] = {
         symbol: float(score) for symbol, score in report.scores_latest.items()
     }
+    research_report["promotion_gate"] = promotion_gate_doc
+    research_report["promotion_gate_evaluation"] = gate_evaluation
+    research_report["promotion_status"] = (
+        "candidate" if gate_evaluation["status"] == "pass" else "rejected"
+    )
     report_path = runtime_root / "research-report.json"
     temporary = report_path.with_name(f".{report_path.name}.tmp")
     temporary.write_text(json.dumps(research_report, ensure_ascii=True, indent=2) + "\n")
     temporary.replace(report_path)
 
-    activated = False
-    if args.activate:
-        activate_champion(
-            runtime_root=runtime_root,
-            champion_id=paths.champion_id,
-            activated_at=generated_at,
+    if gate_evaluation["status"] != "pass":
+        json.dump(
+            {
+                "as_of": as_of_text,
+                "dataset_id": snapshot.dataset_id,
+                "promoted": False,
+                "activated": False,
+                "research_report": str(report_path),
+                "promotion_gate_evaluation": gate_evaluation,
+                "validation_ic_mean": report.validation_ic_mean,
+            },
+            sys.stdout,
+            ensure_ascii=True,
         )
-        activated = True
+        sys.stdout.write("\n")
+        return EXIT_PROMOTION_GATE_FAILED
+
+    paths = promote_baseline_model(
+        repository_root=repository_root,
+        runtime_root=runtime_root,
+        model_bundle_bytes=production_model.bundle_bytes(),
+        report=report,
+        dataset_manifest=manifest,
+        snapshot_symbols=snapshot_symbols,
+        universe_document=universe,
+        as_of=as_of_text,
+        generated_at=generated_at,
+        top_k=args.top_k,
+        per_weight=args.per_weight,
+        feature_names=FEATURE_NAMES,
+        promotion_gate=promotion_gate_doc,
+        rebalance_interval=config.rebalance_interval,
+    )
 
     json.dump(
         {
@@ -254,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
             "champion_path": str(paths.champion_path),
             "champion_id": paths.champion_id,
             "champion_sha256": paths.champion_sha256,
-            "activated": activated,
+            "activated": False,
             "research_report": str(report_path),
             "validation_ic_mean": report.validation_ic_mean,
         },

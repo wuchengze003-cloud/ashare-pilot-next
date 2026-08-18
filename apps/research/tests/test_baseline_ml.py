@@ -386,6 +386,54 @@ def test_validation_ic_window_ends_before_test_period() -> None:
     assert checks["validation_labels_outside_test"].status == "pass"
 
 
+def test_future_prices_cannot_change_prior_walk_forward_nav() -> None:
+    snapshot = synthetic_snapshot(days=110)
+    calendar = sorted({bar.trade_date for bar in snapshot.records})
+    mutation_day = calendar[-8]
+    mutated = DatasetSnapshot(
+        dataset_id=snapshot.dataset_id,
+        dataset_family_id=snapshot.dataset_family_id,
+        manifest_sha256=snapshot.manifest_sha256,
+        as_of=snapshot.as_of,
+        data_schema_id=snapshot.data_schema_id,
+        data_schema_sha256=snapshot.data_schema_sha256,
+        normalization_version=snapshot.normalization_version,
+        records=tuple(
+            DailyBar(
+                symbol=bar.symbol,
+                trade_date=bar.trade_date,
+                open=bar.open * 1.5,
+                high=bar.high * 1.5,
+                low=bar.low * 1.5,
+                close=bar.close * 1.5,
+                volume=bar.volume,
+                amount=bar.amount * 1.5,
+            )
+            if bar.trade_date >= mutation_day
+            else bar
+            for bar in snapshot.records
+        ),
+    )
+    documents = contract_documents()
+
+    def historical_nav(source: DatasetSnapshot) -> list[dict[str, object]]:
+        _model, _production, report = run_walk_forward(
+            source,
+            cost_model_doc=documents["cost-model"],
+            market_rules_doc=documents["market-rules"],
+            execution_policy_doc=documents["execution-policy"],
+            portfolio_risk_doc=documents["portfolio-risk"],
+            config=PilotConfig(top_k=4, per_weight=0.24, model_refit_interval=5),
+        )
+        return [
+            dict(point)
+            for point in report.nav_curve
+            if date.fromisoformat(str(point["trade_date"])) < mutation_day
+        ]
+
+    assert historical_nav(snapshot) == historical_nav(mutated)
+
+
 def test_suspended_symbol_labels_cannot_cross_test_period() -> None:
     snapshot = synthetic_snapshot(days=90)
     calendar = sorted({bar.trade_date for bar in snapshot.records})
@@ -395,7 +443,7 @@ def test_suspended_symbol_labels_cannot_cross_test_period() -> None:
         bar
         for bar in snapshot.records
         if not (
-            bar.symbol == "000732.SZ"
+            bar.symbol == SYMBOLS[0]
             and gap_start <= bar.trade_date <= validation_end_day
         )
     )
@@ -425,3 +473,44 @@ def test_suspended_symbol_labels_cannot_cross_test_period() -> None:
 
     detail_max = _date.fromisoformat(check.detail.split("actual max label end ")[1].split(" ")[0])
     assert detail_max < report.test_start
+
+
+def test_suspended_symbol_unmatured_training_label_is_skipped() -> None:
+    snapshot = synthetic_snapshot(days=90)
+    calendar = sorted({bar.trade_date for bar in snapshot.records})
+    train_end = calendar[int(len(calendar) * 0.60) - 1]
+    gap_start = calendar[int(len(calendar) * 0.45)]
+    records = tuple(
+        bar
+        for bar in snapshot.records
+        if not (
+            bar.symbol == SYMBOLS[0]
+            and gap_start <= bar.trade_date <= train_end
+        )
+    )
+    gapped = DatasetSnapshot(
+        dataset_id=snapshot.dataset_id,
+        dataset_family_id=snapshot.dataset_family_id,
+        manifest_sha256=snapshot.manifest_sha256,
+        as_of=snapshot.as_of,
+        data_schema_id=snapshot.data_schema_id,
+        data_schema_sha256=snapshot.data_schema_sha256,
+        normalization_version=snapshot.normalization_version,
+        records=records,
+    )
+    documents = contract_documents()
+
+    _m, _p, report = run_walk_forward(
+        gapped,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(top_k=4, per_weight=0.24),
+    )
+
+    checks = {check.check_id: check for check in report.leak_checks}
+    assert checks["label_window_inside_train"].status == "pass"
+    assert checks["walk_forward_refit_label_embargo"].status == "pass"
+    assert report.train_end == train_end
+    assert report.oos_max_label_end <= report.training_cutoff < report.test_end

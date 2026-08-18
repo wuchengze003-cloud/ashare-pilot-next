@@ -5,6 +5,11 @@ description = "Provider ingestion and immutable dataset publication boundary"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+ashare-data-acquire = "ashare_data_gateway.pilot_acquire:main"
+ashare-data-bootstrap = "ashare_data_gateway.full_market_import:main"
+ashare-data-roll-forward = "ashare_data_gateway.roll_forward:main"
+
 [build-system]
 requires = ["uv_build>=0.10.8,<0.11.0"]
 build-backend = "uv_build"

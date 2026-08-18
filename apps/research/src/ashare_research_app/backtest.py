@@ -9,6 +9,7 @@ not a production signal.
 from __future__ import annotations
 
 import math
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -40,6 +41,8 @@ class PilotConfig:
     initial_capital: Decimal = Decimal("500000")
     top_k: int = 5
     per_weight: float = 0.2
+    rebalance_interval: int = 5
+    model_refit_interval: int = 20
 
     def __post_init__(self) -> None:
         if self.initial_capital <= 0:
@@ -48,6 +51,10 @@ class PilotConfig:
             raise ValueError("top_k must be positive")
         if not 0 < self.per_weight <= 1:
             raise ValueError("per_weight must be in (0, 1]")
+        if self.rebalance_interval < 1:
+            raise ValueError("rebalance_interval must be positive")
+        if self.model_refit_interval < 1:
+            raise ValueError("model_refit_interval must be positive")
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,13 @@ class BacktestReport:
     first_nav_date: date
     frozen_valuations: tuple[str, ...]
     validation_ic_mean: float
+    score_orientation: int
+    top_k: int
+    per_weight: float
+    rebalance_interval: int
+    model_refit_interval: int
+    oos_refit_count: int
+    oos_max_label_end: date
     nav_curve: tuple[Mapping[str, object], ...]
     metrics: Mapping[str, float]
     final_state: SimulatedPortfolioState
@@ -141,11 +155,10 @@ def _spearman_ics(
     can land later than the global calendar implies; such pairs are
     excluded here and the true maximum label end date is returned.
     """
-    ics: list[float] = []
+    eligible: list[tuple[date, FeatureRow, float]] = []
     max_label_end: date | None = None
     for signal_date in dates:
         rows = rows_by_date.get(signal_date, [])
-        pairs: list[tuple[float, float]] = []
         for row in rows:
             symbol_history = history[row.symbol]
             index = next(
@@ -165,19 +178,36 @@ def _spearman_ics(
                 continue
             if max_label_end is None or label_end > max_label_end:
                 max_label_end = label_end
-            score = float(model.score(np.asarray(row.values, dtype=float).reshape(1, -1))[0])
-            pairs.append((score, realized))
-        if len(pairs) >= 3:
-            ics.append(_rank_correlation([p[0] for p in pairs], [p[1] for p in pairs]))
+            eligible.append((signal_date, row, realized))
+    if not eligible:
+        return [], max_label_end
+    matrix = np.asarray([row.values for _, row, _ in eligible], dtype=float)
+    predicted = model.score(matrix)
+    pairs_by_date: dict[date, list[tuple[float, float]]] = {}
+    for (signal_date, _row, realized), score in zip(eligible, predicted, strict=True):
+        pairs_by_date.setdefault(signal_date, []).append((float(score), realized))
+    ics = [
+        _rank_correlation([pair[0] for pair in pairs], [pair[1] for pair in pairs])
+        for signal_date in dates
+        if len(pairs := pairs_by_date.get(signal_date, [])) >= 3
+    ]
     return ics, max_label_end
 
 
-def _last_known_close(history: dict[str, list[DailyBar]], *, through: date) -> dict[str, float]:
+def _last_known_close(
+    history: dict[str, list[DailyBar]],
+    history_dates: dict[str, list[date]],
+    *,
+    through: date,
+    symbols: Sequence[str] | set[str] | None = None,
+) -> dict[str, float]:
     prices: dict[str, float] = {}
-    for symbol, bars in history.items():
-        visible = [bar for bar in bars if bar.trade_date <= through]
-        if visible:
-            prices[symbol] = visible[-1].close
+    for symbol in symbols if symbols is not None else history:
+        bars = history.get(symbol, [])
+        dates = history_dates.get(symbol, [])
+        position = bisect_right(dates, through) - 1
+        if position >= 0:
+            prices[symbol] = bars[position].close
     return prices
 
 
@@ -210,97 +240,86 @@ def run_walk_forward(
     rebalance_threshold = float(portfolio_risk_doc.get("rebalance_threshold", 0.0))
     if cfg.top_k > max_positions:
         raise ValueError("top_k exceeds portfolio-risk max_positions")
-    per_weight = min(cfg.per_weight, max_single_weight)
+    if cfg.per_weight > max_single_weight:
+        raise ValueError("per_weight exceeds portfolio-risk max_single_weight")
+    if cfg.top_k * cfg.per_weight > max_gross_exposure + 1e-12:
+        raise ValueError("target weights exceed portfolio-risk max_gross_exposure")
+    per_weight = cfg.per_weight
 
     history = _group_history(snapshot)
+    history_dates = {
+        symbol: [bar.trade_date for bar in bars] for symbol, bars in history.items()
+    }
+    bars_by_date: dict[date, dict[str, DailyBar]] = {}
+    for symbol, bars in history.items():
+        for bar in bars:
+            bars_by_date.setdefault(bar.trade_date, {})[symbol] = bar
     dates = tuple(sorted({bar.trade_date for bars in history.values() for bar in bars}))
     train_end, validation_start, validation_end, test_start = _split_dates(dates)
     date_index = {day: position for position, day in enumerate(dates)}
-    train_end_index = date_index[train_end]
 
     panel = build_feature_panel(snapshot)
     rows_by_date: dict[date, list[FeatureRow]] = {}
     for row in panel:
         rows_by_date.setdefault(row.trade_date, []).append(row)
 
-    training_rows = sorted(
-        (row for row in panel if row.trade_date <= train_end),
-        key=lambda row: (row.trade_date, row.symbol),
-    )
-    if not training_rows:
+    ordered_panel = sorted(panel, key=lambda row: (row.trade_date, row.symbol))
+    if not ordered_panel:
         raise ValueError("no training rows available")
-    ordered_dates = [row.trade_date for row in training_rows]
+    ordered_dates = [row.trade_date for row in ordered_panel]
     if ordered_dates != sorted(ordered_dates):
         raise ValueError("training rows must stay time-ordered")
 
-    feature_matrix = np.asarray([row.values for row in training_rows], dtype=float)
-    labels_by_horizon: dict[int, np.ndarray] = {}
-    max_label_end = train_end
+    feature_matrix = np.asarray([row.values for row in ordered_panel], dtype=float)
+    history_index = {
+        symbol: {bar.trade_date: position for position, bar in enumerate(bars)}
+        for symbol, bars in history.items()
+    }
+    label_values = {
+        horizon: np.full(len(ordered_panel), np.nan, dtype=float) for horizon in horizons
+    }
+    label_end_ordinals = {
+        horizon: np.full(len(ordered_panel), -1, dtype=np.int64) for horizon in horizons
+    }
     for horizon in horizons:
-        labels = np.full(len(training_rows), np.nan, dtype=float)
-        for position, row in enumerate(training_rows):
+        for position, row in enumerate(ordered_panel):
             symbol_history = history[row.symbol]
-            index = date_index[row.trade_date]
-            target_index = index + horizon
-            if target_index > train_end_index:
-                continue
-            bar_index = next(
-                (i for i, bar in enumerate(symbol_history) if bar.trade_date == row.trade_date),
-                None,
-            )
-            if bar_index is None:
-                continue
-            realized = forward_return_label(symbol_history, bar_index, horizon)
-            if realized is None:
-                continue
-            labels[position] = realized
-            end_date = symbol_history[bar_index + horizon].trade_date
-            if end_date > max_label_end:
-                raise ValueError("label window escaped the training cutoff")
-        labels_by_horizon[horizon] = labels
-
-    model = MultiHorizonModel(horizons=horizons)
-    model.fit(feature_matrix, labels_by_horizon, training_cutoff=train_end)
-
-    max_horizon = max(horizons)
-    production_cutoff = dates[len(dates) - 1 - max_horizon]
-    production_index = date_index[production_cutoff]
-    production_rows = sorted(
-        (row for row in panel if row.trade_date <= production_cutoff),
-        key=lambda row: (row.trade_date, row.symbol),
-    )
-    production_matrix = np.asarray([row.values for row in production_rows], dtype=float)
-    production_labels: dict[int, np.ndarray] = {}
-    for horizon in horizons:
-        labels = np.full(len(production_rows), np.nan, dtype=float)
-        for position, row in enumerate(production_rows):
-            index = date_index[row.trade_date]
-            if index + horizon > production_index:
-                continue
-            symbol_history = history[row.symbol]
-            bar_index = next(
-                (i for i, bar in enumerate(symbol_history) if bar.trade_date == row.trade_date),
-                None,
-            )
-            if bar_index is None:
-                continue
+            bar_index = history_index[row.symbol][row.trade_date]
             label_end_index = bar_index + horizon
             if label_end_index >= len(symbol_history):
                 continue
-            if symbol_history[label_end_index].trade_date > production_cutoff:
-                continue
+            end_date = symbol_history[label_end_index].trade_date
             realized = forward_return_label(symbol_history, bar_index, horizon)
-            if realized is not None:
-                labels[position] = realized
-        production_labels[horizon] = labels
-    production_model = MultiHorizonModel(horizons=horizons)
-    production_model.fit(
-        production_matrix,
-        production_labels,
-        training_cutoff=production_cutoff,
-    )
-    bundle_sha256 = MultiHorizonModel.bundle_sha256(production_model.bundle_bytes())
+            if realized is None:
+                continue
+            label_values[horizon][position] = realized
+            label_end_ordinals[horizon][position] = end_date.toordinal()
 
+    def fit_mature_model(*, cutoff: date) -> tuple[MultiHorizonModel, date]:
+        """Fit only labels whose symbol-specific outcome is known by cutoff."""
+        cutoff_ordinal = cutoff.toordinal()
+        mature_labels: dict[int, np.ndarray] = {}
+        included_label_ends: list[int] = []
+        for horizon in horizons:
+            mature = (
+                (label_end_ordinals[horizon] >= 0)
+                & (label_end_ordinals[horizon] <= cutoff_ordinal)
+            )
+            mature_labels[horizon] = np.where(
+                mature, label_values[horizon], np.nan
+            )
+            included_label_ends.extend(label_end_ordinals[horizon][mature].tolist())
+        if not included_label_ends:
+            raise ValueError("no mature training labels available")
+        fitted = MultiHorizonModel(horizons=horizons)
+        fitted.fit(feature_matrix, mature_labels, training_cutoff=cutoff)
+        return fitted, date.fromordinal(max(included_label_ends))
+
+    model, max_label_end = fit_mature_model(cutoff=train_end)
+    production_cutoff = dates[-1]
+    production_model, _production_max_label_end = fit_mature_model(
+        cutoff=production_cutoff
+    )
     test_start_index = date_index[test_start]
     validation_dates = [
         day
@@ -319,17 +338,46 @@ def run_walk_forward(
     )
     if not ics or validation_ic_end is None:
         raise ValueError("validation IC produced no observations")
-    validation_ic_mean = float(sum(ics) / len(ics))
+    raw_validation_ic_mean = float(sum(ics) / len(ics))
+    score_orientation = -1 if raw_validation_ic_mean < 0 else 1
+    model.set_orientation(score_orientation)
+    production_model.set_orientation(score_orientation)
+    validation_ic_mean = abs(raw_validation_ic_mean)
+    bundle_sha256 = MultiHorizonModel.bundle_sha256(production_model.bundle_bytes())
 
     signal_dates = [day for day in dates if day in rows_by_date]
-
-    def score_date(signal_date: date) -> dict[str, float]:
+    evaluation_scores_by_date: dict[date, dict[str, float]] = {}
+    rolling_model: MultiHorizonModel | None = None
+    last_refit_index: int | None = None
+    refit_evidence: list[tuple[date, date, date]] = []
+    for signal_date in (day for day in signal_dates if day >= test_start):
+        signal_index = date_index[signal_date]
+        if signal_index == 0:
+            continue
+        if (
+            rolling_model is None
+            or last_refit_index is None
+            or signal_index - last_refit_index >= cfg.model_refit_interval
+        ):
+            # A one-session embargo makes the timing unambiguous: a model
+            # scoring at today's close uses outcomes known by yesterday's close.
+            # Label maturity remains symbol-specific across suspension gaps.
+            refit_cutoff = dates[signal_index - 1]
+            rolling_model, refit_max_label_end = fit_mature_model(cutoff=refit_cutoff)
+            rolling_model.set_orientation(score_orientation)
+            last_refit_index = signal_index
+            refit_evidence.append((signal_date, refit_cutoff, refit_max_label_end))
         rows = rows_by_date.get(signal_date, [])
-        if not rows:
-            return {}
-        matrix = np.asarray([row.values for row in rows], dtype=float)
-        scores = model.score(matrix)
-        return {row.symbol: float(score) for row, score in zip(rows, scores, strict=True)}
+        if not rows or rolling_model is None:
+            continue
+        scores = rolling_model.score(np.asarray([row.values for row in rows], dtype=float))
+        evaluation_scores_by_date[signal_date] = {
+            row.symbol: float(score) for row, score in zip(rows, scores, strict=True)
+        }
+    if rolling_model is None or not refit_evidence:
+        raise ValueError("walk-forward produced no out-of-sample refits")
+    model = rolling_model
+    oos_max_label_end = max(item[2] for item in refit_evidence)
 
     def score_production(signal_date: date) -> dict[str, float]:
         """Score with the production model; for signal generation only."""
@@ -353,23 +401,34 @@ def run_walk_forward(
     test_dates = [day for day in dates if day >= test_start]
     for execution_date in test_dates:
         state = settle_t_plus_one(state, trade_date=execution_date, buy_dates=buy_dates)
-        prior_signals = [day for day in signal_dates if day < execution_date and day >= test_start]
-        if not prior_signals:
+        signal_position = bisect_left(signal_dates, execution_date) - 1
+        if signal_position < 0:
             continue
-        signal_date = prior_signals[-1]
+        signal_date = signal_dates[signal_position]
+        if signal_date < test_start:
+            continue
         if not benchmark_symbols:
-            tradable: dict[str, float] = {}
-            for symbol, bars in history.items():
-                todays = [bar for bar in bars if bar.trade_date == execution_date]
-                if todays:
-                    tradable[symbol] = todays[0].close
+            tradable = {
+                symbol: bar.close
+                for symbol, bar in bars_by_date.get(execution_date, {}).items()
+            }
             benchmark_base = tradable
             benchmark_symbols = tuple(sorted(benchmark_base))
 
-        scores = score_date(signal_date)
+        is_rebalance_day = date_index[signal_date] % cfg.rebalance_interval == 0
+        scores = evaluation_scores_by_date.get(signal_date, {})
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
-        targets = [symbol for symbol, _ in ranked[: cfg.top_k]]
-        prev_prices = _last_known_close(history, through=signal_date)
+        targets = (
+            [symbol for symbol, _ in ranked[: cfg.top_k]]
+            if is_rebalance_day
+            else list(state.holdings)
+        )
+        prev_prices = _last_known_close(
+            history,
+            history_dates,
+            through=signal_date,
+            symbols=set(state.holdings) | set(targets),
+        )
         held_prices = {
             symbol: prev_prices[symbol] for symbol in state.holdings if symbol in prev_prices
         }
@@ -379,10 +438,9 @@ def run_walk_forward(
         day_bars: dict[str, DailyBarView | None] = {}
         previous_closes: dict[str, float] = {}
         for symbol in sorted(set(state.holdings) | set(targets)):
-            bars = history.get(symbol, [])
-            todays = [bar for bar in bars if bar.trade_date == execution_date]
+            today = bars_by_date.get(execution_date, {}).get(symbol)
             day_bars[symbol] = (
-                DailyBarView(open=todays[0].open, close=todays[0].close) if todays else None
+                DailyBarView(open=today.open, close=today.close) if today else None
             )
             if symbol in prev_prices:
                 previous_closes[symbol] = prev_prices[symbol]
@@ -421,56 +479,58 @@ def run_walk_forward(
                     }
                 )
 
-        for symbol in sorted(state.holdings):
-            if symbol in targets:
-                continue
-            state, trade, skip = execute_sell(
-                state=state,
-                day=execution_day,
-                symbol=symbol,
-                rules=rules,
-                cost_model=cost_model_doc,
-                reason="MODEL_EXIT",
-            )
-            record_trade(symbol, "sell", trade, skip)
+        if is_rebalance_day:
+            for symbol in sorted(state.holdings):
+                if symbol in targets:
+                    continue
+                state, trade, skip = execute_sell(
+                    state=state,
+                    day=execution_day,
+                    symbol=symbol,
+                    rules=rules,
+                    cost_model=cost_model_doc,
+                    reason="MODEL_EXIT",
+                )
+                record_trade(symbol, "sell", trade, skip)
 
         total_assets_float = float(total_assets)
 
-        for symbol in sorted(state.holdings):
-            if symbol not in targets or symbol not in prev_prices:
-                continue
-            holding = state.holdings[symbol]
-            current_weight = holding.shares * prev_prices[symbol] / total_assets_float
-            drift = per_weight - current_weight
-            lot = rules[classify_board(symbol)].lot_size
-            if drift < -rebalance_threshold:
-                excess_shares = int(((-drift) * total_assets_float) // prev_prices[symbol])
-                if excess_shares >= lot:
-                    state, trade, skip = execute_sell(
-                        state=state,
-                        day=execution_day,
-                        symbol=symbol,
-                        rules=rules,
-                        cost_model=cost_model_doc,
-                        reason="REBALANCE_TRIM",
-                        max_shares=excess_shares,
-                    )
-                    record_trade(symbol, "sell", trade, skip)
-            elif drift > rebalance_threshold:
-                requested = int((drift * total_assets_float) // prev_prices[symbol])
-                if requested >= lot:
-                    state, trade, skip, bought_on = execute_buy(
-                        state=state,
-                        day=execution_day,
-                        symbol=symbol,
-                        requested_shares=requested,
-                        rules=rules,
-                        cost_model=cost_model_doc,
-                        reason="REBALANCE_TOPUP",
-                    )
-                    if trade is not None and bought_on is not None:
-                        buy_dates.setdefault(symbol, bought_on)
-                    record_trade(symbol, "buy", trade, skip)
+        if is_rebalance_day:
+            for symbol in sorted(state.holdings):
+                if symbol not in targets or symbol not in prev_prices:
+                    continue
+                holding = state.holdings[symbol]
+                current_weight = holding.shares * prev_prices[symbol] / total_assets_float
+                drift = per_weight - current_weight
+                lot = rules[classify_board(symbol)].lot_size
+                if drift < -rebalance_threshold:
+                    excess_shares = int(((-drift) * total_assets_float) // prev_prices[symbol])
+                    if excess_shares >= lot:
+                        state, trade, skip = execute_sell(
+                            state=state,
+                            day=execution_day,
+                            symbol=symbol,
+                            rules=rules,
+                            cost_model=cost_model_doc,
+                            reason="REBALANCE_TRIM",
+                            max_shares=excess_shares,
+                        )
+                        record_trade(symbol, "sell", trade, skip)
+                elif drift > rebalance_threshold:
+                    requested = int((drift * total_assets_float) // prev_prices[symbol])
+                    if requested >= lot:
+                        state, trade, skip, bought_on = execute_buy(
+                            state=state,
+                            day=execution_day,
+                            symbol=symbol,
+                            requested_shares=requested,
+                            rules=rules,
+                            cost_model=cost_model_doc,
+                            reason="REBALANCE_TOPUP",
+                        )
+                        if trade is not None and bought_on is not None:
+                            buy_dates.setdefault(symbol, bought_on)
+                        record_trade(symbol, "buy", trade, skip)
 
         held_gross_weight = (
             sum(
@@ -481,32 +541,38 @@ def run_walk_forward(
         )
         available_slots = max_positions - len(state.holdings)
         exposure_budget = max_gross_exposure - held_gross_weight
-        for symbol in targets:
-            if symbol in state.holdings:
-                continue
-            if available_slots <= 0 or exposure_budget < per_weight * 0.5:
-                continue
-            reference_price = prev_prices.get(symbol)
-            if reference_price is None:
-                continue
-            buy_weight = min(per_weight, exposure_budget)
-            requested = int((total_assets_float * buy_weight) // reference_price)
-            state, trade, skip, bought_on = execute_buy(
-                state=state,
-                day=execution_day,
-                symbol=symbol,
-                requested_shares=requested,
-                rules=rules,
-                cost_model=cost_model_doc,
-                reason="MODEL_TOP_SCORE",
-            )
-            if trade is not None and bought_on is not None:
-                buy_dates[symbol] = bought_on
-                available_slots -= 1
-                exposure_budget -= per_weight
-            record_trade(symbol, "buy", trade, skip)
+        if is_rebalance_day:
+            for symbol in targets:
+                if symbol in state.holdings:
+                    continue
+                if available_slots <= 0 or exposure_budget < per_weight * 0.5:
+                    continue
+                reference_price = prev_prices.get(symbol)
+                if reference_price is None:
+                    continue
+                buy_weight = min(per_weight, exposure_budget)
+                requested = int((total_assets_float * buy_weight) // reference_price)
+                state, trade, skip, bought_on = execute_buy(
+                    state=state,
+                    day=execution_day,
+                    symbol=symbol,
+                    requested_shares=requested,
+                    rules=rules,
+                    cost_model=cost_model_doc,
+                    reason="MODEL_TOP_SCORE",
+                )
+                if trade is not None and bought_on is not None:
+                    buy_dates[symbol] = bought_on
+                    available_slots -= 1
+                    exposure_budget -= per_weight
+                record_trade(symbol, "buy", trade, skip)
 
-        close_prices = _last_known_close(history, through=execution_date)
+        close_prices = _last_known_close(
+            history,
+            history_dates,
+            through=execution_date,
+            symbols=set(state.holdings),
+        )
         held_close_prices = {
             symbol: close_prices[symbol] for symbol in state.holdings if symbol in close_prices
         }
@@ -514,11 +580,12 @@ def run_walk_forward(
             mark_to_market(state, prices=held_close_prices) if held_close_prices else state.cash
         )
         benchmark_values = []
+        execution_bars = bars_by_date.get(execution_date, {})
         for symbol in benchmark_symbols:
             base = benchmark_base.get(symbol)
-            todays = [bar for bar in history[symbol] if bar.trade_date == execution_date]
-            if base and todays:
-                benchmark_values.append(todays[0].close / base)
+            today = execution_bars.get(symbol)
+            if base and today:
+                benchmark_values.append(today.close / base)
         benchmark_nav = sum(benchmark_values) / len(benchmark_values) if benchmark_values else 1.0
         if first_nav_date is None:
             first_nav_date = execution_date
@@ -574,7 +641,11 @@ def run_walk_forward(
     latest_scores = score_production(latest_signal_date)
     latest_ranked = sorted(latest_scores.items(), key=lambda item: (-item[1], item[0]))
     latest_targets = [symbol for symbol, _ in latest_ranked[: cfg.top_k]]
-    latest_prices = _last_known_close(history, through=latest_signal_date)
+    latest_prices = _last_known_close(
+        history,
+        history_dates,
+        through=latest_signal_date,
+    )
     final_prices = {
         symbol: latest_prices[symbol] for symbol in state.holdings if symbol in latest_prices
     }
@@ -667,7 +738,23 @@ def run_walk_forward(
         LeakCheck(
             check_id="training_rows_time_ordered",
             status="pass",
-            detail=f"{len(training_rows)} training rows keep non-decreasing trade_date",
+            detail=f"{len(ordered_panel)} feature rows keep non-decreasing trade_date",
+        ),
+        LeakCheck(
+            check_id="walk_forward_refit_label_embargo",
+            status=(
+                "pass"
+                if all(
+                    label_end <= cutoff < signal
+                    for signal, cutoff, label_end in refit_evidence
+                )
+                else "fail"
+            ),
+            detail=(
+                f"{len(refit_evidence)} expanding-window refits; all labels mature "
+                f"by the prior-session cutoff; latest included label end "
+                f"{oos_max_label_end.isoformat()}"
+            ),
         ),
         LeakCheck(
             check_id="feature_pit_truncation_invariant",
@@ -698,11 +785,18 @@ def run_walk_forward(
         test_start=test_start,
         test_end=dates[-1],
         model_bundle_sha256=bundle_sha256,
-        training_cutoff=train_end,
+        training_cutoff=model.training_cutoff or train_end,
         production_training_cutoff=production_cutoff,
         first_nav_date=first_nav_date,
         frozen_valuations=frozen_valuations,
         validation_ic_mean=validation_ic_mean,
+        score_orientation=score_orientation,
+        top_k=cfg.top_k,
+        per_weight=cfg.per_weight,
+        rebalance_interval=cfg.rebalance_interval,
+        model_refit_interval=cfg.model_refit_interval,
+        oos_refit_count=len(refit_evidence),
+        oos_max_label_end=oos_max_label_end,
         nav_curve=tuple(nav_points),
         metrics={
             "total_return": round(total_return, 6),
