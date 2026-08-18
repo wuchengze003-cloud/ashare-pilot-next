@@ -23,7 +23,9 @@ from arch.bootstrap import SPA
 from ashare_quant_core import DatasetSnapshot
 
 from .backtest import BacktestReport, PilotConfig, _split_dates, run_walk_forward
+from .baseline_model import TrainingWindow
 from .datasets import load_manifest, load_snapshot
+from .feature_datasets import FeatureDataset
 from .performance import annualized_sharpe, returns_from_nav_curve
 from .promotion import (
     PILOT_EXECUTION_POLICY,
@@ -44,6 +46,7 @@ class CandidateSpec:
     top_k: int
     rebalance_interval: int = 5
     model_refit_interval: int = 20
+    feature_transform: str = "raw"
 
     @property
     def per_weight(self) -> float:
@@ -94,6 +97,8 @@ def _run_candidate(
     snapshot: DatasetSnapshot,
     spec: CandidateSpec,
     repository_root: Path,
+    training_window: TrainingWindow | None = None,
+    feature_dataset: FeatureDataset | None = None,
 ) -> BacktestReport:
     _model, _production, report = run_walk_forward(
         snapshot,
@@ -108,7 +113,10 @@ def _run_candidate(
             rebalance_interval=spec.rebalance_interval,
             model_refit_interval=spec.model_refit_interval,
             model_kind=spec.model_kind,
+            feature_transform=spec.feature_transform,
         ),
+        training_window=training_window,
+        feature_dataset=feature_dataset,
     )
     return report
 
@@ -156,7 +164,10 @@ def _spa_result(reports: dict[str, BacktestReport]) -> dict[str, object]:
     )
     comparison.compute()
     pvalues = {str(key): float(value) for key, value in comparison.pvalues.items()}
-    superior = [str(value) for value in comparison.better_models(pvalue=0.05)]
+    superior = [
+        str(model_frame.columns[int(index)])
+        for index in comparison.better_models(pvalue=0.05)
+    ]
     return {
         "method": "arch.bootstrap.SPA",
         "repetitions": 2000,

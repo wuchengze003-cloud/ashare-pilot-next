@@ -32,6 +32,7 @@ from ashare_quant_core import UniverseMember, UniverseSnapshot
 from jsonschema import Draft202012Validator, FormatChecker
 
 from .backtest import BacktestReport
+from .canonical import canonical_json_bytes, canonical_json_sha256
 from .features import MIN_OBSERVATIONS, _return, compute_feature_row
 from .performance import annualized_sharpe, returns_from_nav_curve
 
@@ -195,14 +196,6 @@ def build_strategy(config: Mapping[str, object]) -> BaselineMLStrategy:
 
 class ChampionPackageError(ValueError):
     """Raised when a frozen champion package cannot be created or verified."""
-
-
-def canonical_json_bytes(document: Mapping[str, Any]) -> bytes:
-    return json.dumps(document, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
-
-
-def canonical_json_sha256(document: Mapping[str, Any]) -> str:
-    return hashlib.sha256(canonical_json_bytes(document)).hexdigest()
 
 
 def _write_json(path: Path, document: Mapping[str, Any]) -> None:
@@ -493,6 +486,7 @@ def promote_baseline_model(
         "validation_ic_mean": report.validation_ic_mean,
         "score_orientation": report.score_orientation,
         "model_kind": report.model_kind,
+        "feature_transform": report.feature_transform,
         "top_k": report.top_k,
         "per_weight": report.per_weight,
         "rebalance_interval": report.rebalance_interval,

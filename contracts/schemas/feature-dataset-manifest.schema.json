@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.ashare-pilot.local/feature-dataset-manifest/1.0.0",
+  "title": "Feature Dataset Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_version",
+    "feature_dataset_id",
+    "base_dataset_id",
+    "base_manifest_sha256",
+    "universe_sha256",
+    "feature_schema_id",
+    "feature_schema_sha256",
+    "normalization_version",
+    "as_of",
+    "generated_at",
+    "source",
+    "source_version",
+    "quality_status",
+    "quality_reasons",
+    "coverage",
+    "files"
+  ],
+  "properties": {
+    "contract_id": {"const": "feature-dataset-manifest"},
+    "schema_version": {"const": "1.0.0"},
+    "feature_dataset_id": {"type": "string", "pattern": "^feature-dataset-sha256-[a-f0-9]{64}$"},
+    "base_dataset_id": {"type": "string", "pattern": "^dataset-sha256-[a-f0-9]{64}$"},
+    "base_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "universe_sha256": {"$ref": "#/$defs/sha256"},
+    "feature_schema_id": {"const": "market-auxiliary-features/v1"},
+    "feature_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "normalization_version": {"const": "tushare-market-auxiliary-normalizer/v1"},
+    "as_of": {"type": "string", "format": "date"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "source": {"const": "tushare-export-import"},
+    "source_version": {"const": "v1"},
+    "quality_status": {"const": "pass"},
+    "quality_reasons": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "daily_bar_rows",
+        "daily_feature_rows",
+        "daily_basic_present_rows",
+        "moneyflow_present_rows",
+        "holder_rows",
+        "holder_symbols",
+        "missing_holder_symbols",
+        "quarantined_holder_rows",
+        "source_file_count"
+      ],
+      "properties": {
+        "daily_bar_rows": {"type": "integer", "minimum": 1},
+        "daily_feature_rows": {"type": "integer", "minimum": 1},
+        "daily_basic_present_rows": {"type": "integer", "minimum": 0},
+        "moneyflow_present_rows": {"type": "integer", "minimum": 0},
+        "holder_rows": {"type": "integer", "minimum": 0},
+        "holder_symbols": {"type": "integer", "minimum": 0},
+        "missing_holder_symbols": {"type": "integer", "minimum": 0},
+        "quarantined_holder_rows": {"type": "integer", "minimum": 0},
+        "source_file_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/file"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "path",
+        "sha256",
+        "row_count",
+        "file_size_bytes",
+        "min_effective_date",
+        "max_effective_date"
+      ],
+      "properties": {
+        "role": {"enum": ["daily_features", "holder_snapshots", "source_index"]},
+        "path": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]*$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "row_count": {"type": "integer", "minimum": 0},
+        "file_size_bytes": {"type": "integer", "minimum": 1},
+        "min_effective_date": {"type": ["string", "null"], "format": "date"},
+        "max_effective_date": {"type": ["string", "null"], "format": "date"}
+      }
+    }
+  }
+}

@@ -30,8 +30,20 @@ from ashare_quant_core import (
     settle_t_plus_one,
 )
 
-from .baseline_model import DEFAULT_HORIZONS, MODEL_KINDS, MultiHorizonModel
-from .features import FEATURE_NAMES, FeatureRow, build_feature_panel, forward_return_label
+from .baseline_model import (
+    DEFAULT_HORIZONS,
+    MODEL_KINDS,
+    MultiHorizonModel,
+    TrainingWindow,
+)
+from .feature_datasets import FeatureDataset
+from .features import (
+    FEATURE_TRANSFORMS,
+    FeatureRow,
+    build_feature_panel,
+    feature_names_for_transform,
+    forward_return_label,
+)
 
 LABEL_HORIZON_FOR_VALIDATION = 5
 
@@ -44,6 +56,7 @@ class PilotConfig:
     rebalance_interval: int = 5
     model_refit_interval: int = 20
     model_kind: str = "hist_gradient_boosting"
+    feature_transform: str = "raw"
 
     def __post_init__(self) -> None:
         if self.initial_capital <= 0:
@@ -58,6 +71,8 @@ class PilotConfig:
             raise ValueError("model_refit_interval must be positive")
         if self.model_kind not in MODEL_KINDS:
             raise ValueError(f"unsupported model_kind: {self.model_kind}")
+        if self.feature_transform not in FEATURE_TRANSFORMS:
+            raise ValueError(f"unsupported feature_transform: {self.feature_transform}")
 
 
 @dataclass(frozen=True)
@@ -84,6 +99,9 @@ class BacktestReport:
     validation_ic_mean: float
     score_orientation: int
     model_kind: str
+    feature_transform: str
+    feature_dataset_id: str | None
+    feature_dataset_manifest_sha256: str | None
     top_k: int
     per_weight: float
     rebalance_interval: int
@@ -224,6 +242,8 @@ def run_walk_forward(
     portfolio_risk_doc: Mapping[str, object],
     config: PilotConfig | None = None,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+    training_window: TrainingWindow | None = None,
+    feature_dataset: FeatureDataset | None = None,
 ) -> tuple[MultiHorizonModel, MultiHorizonModel, BacktestReport]:
     """Train, validate, and simulate strictly out-of-sample.
 
@@ -259,10 +279,26 @@ def run_walk_forward(
         for bar in bars:
             bars_by_date.setdefault(bar.trade_date, {})[symbol] = bar
     dates = tuple(sorted({bar.trade_date for bars in history.values() for bar in bars}))
-    train_end, validation_start, validation_end, test_start = _split_dates(dates)
+    if training_window is None:
+        train_end, validation_start, validation_end, test_start = _split_dates(dates)
+    else:
+        train_end = training_window.train_end
+        validation_start = training_window.validation_start
+        validation_end = training_window.validation_end
+        test_start = training_window.test_start
+        if any(
+            boundary not in dates
+            for boundary in (train_end, validation_start, validation_end, test_start)
+        ):
+            raise ValueError("training window boundaries must be dataset trade dates")
     date_index = {day: position for position, day in enumerate(dates)}
 
-    panel = build_feature_panel(snapshot)
+    feature_names = feature_names_for_transform(cfg.feature_transform)
+    panel = build_feature_panel(
+        snapshot,
+        feature_transform=cfg.feature_transform,
+        feature_dataset=feature_dataset,
+    )
     rows_by_date: dict[date, list[FeatureRow]] = {}
     for row in panel:
         rows_by_date.setdefault(row.trade_date, []).append(row)
@@ -705,13 +741,18 @@ def run_walk_forward(
     feature_weights: list[Mapping[str, object]] = []
     if score_matrix.size:
         latest_score_vector = production_model.score(score_matrix)
-        for column, name in enumerate(FEATURE_NAMES):
+        for column, name in enumerate(feature_names):
             column_values = score_matrix[:, column]
             weight = abs(_rank_correlation(list(column_values), list(latest_score_vector)))
             feature_weights.append({"name": name, "weight": round(float(weight), 6)})
         feature_weights.sort(key=lambda item: (-item["weight"], item["name"]))
 
-    truncated_panel = build_feature_panel(snapshot, as_of=latest_signal_date)
+    truncated_panel = build_feature_panel(
+        snapshot,
+        as_of=latest_signal_date,
+        feature_transform=cfg.feature_transform,
+        feature_dataset=feature_dataset,
+    )
     full_panel_visible = tuple(row for row in panel if row.trade_date <= latest_signal_date)
     pit_status = "pass" if truncated_panel == full_panel_visible else "fail"
 
@@ -796,6 +837,13 @@ def run_walk_forward(
         validation_ic_mean=validation_ic_mean,
         score_orientation=score_orientation,
         model_kind=cfg.model_kind,
+        feature_transform=cfg.feature_transform,
+        feature_dataset_id=(
+            feature_dataset.feature_dataset_id if feature_dataset is not None else None
+        ),
+        feature_dataset_manifest_sha256=(
+            feature_dataset.manifest_sha256 if feature_dataset is not None else None
+        ),
         top_k=cfg.top_k,
         per_weight=cfg.per_weight,
         rebalance_interval=cfg.rebalance_interval,

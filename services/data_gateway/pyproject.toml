@@ -9,6 +9,7 @@ dependencies = []
 ashare-data-acquire = "ashare_data_gateway.pilot_acquire:main"
 ashare-data-bootstrap = "ashare_data_gateway.full_market_import:main"
 ashare-data-roll-forward = "ashare_data_gateway.roll_forward:main"
+ashare-feature-publish = "ashare_data_gateway.feature_publication:main"
 
 [build-system]
 requires = ["uv_build>=0.10.8,<0.11.0"]

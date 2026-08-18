@@ -1,0 +1,25 @@
+{
+  "schema_id": "market-auxiliary-features/v1",
+  "daily_feature_primary_key": ["symbol", "trade_date"],
+  "holder_snapshot_primary_key": ["symbol", "ann_date", "end_date"],
+  "daily_feature_fields": [
+    ["symbol", "string"],
+    ["trade_date", "date"],
+    ["turnover_rate_f", "nullable-percent"],
+    ["volume_ratio", "nullable-ratio"],
+    ["pe_ttm", "nullable-ratio"],
+    ["pb", "nullable-ratio"],
+    ["ps_ttm", "nullable-ratio"],
+    ["dv_ttm", "nullable-percent"],
+    ["total_mv", "nullable-10k-cny"],
+    ["circ_mv", "nullable-10k-cny"],
+    ["net_mf_amount", "nullable-10k-cny"]
+  ],
+  "holder_snapshot_fields": [
+    ["symbol", "string"],
+    ["ann_date", "date"],
+    ["end_date", "date"],
+    ["holder_num", "positive-integer"]
+  ],
+  "point_in_time_rule": "holder snapshot becomes visible on ann_date; end_date is never used as availability time"
+}

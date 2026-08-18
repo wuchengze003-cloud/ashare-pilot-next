@@ -13,7 +13,7 @@ from ashare_quant_core import (
     DatasetSnapshot,
 )
 from ashare_research_app.backtest import PilotConfig, run_walk_forward
-from ashare_research_app.baseline_model import MODEL_KINDS, MultiHorizonModel
+from ashare_research_app.baseline_model import MODEL_KINDS, MultiHorizonModel, TrainingWindow
 from ashare_research_app.features import (
     FEATURE_NAMES,
     build_feature_panel,
@@ -153,6 +153,27 @@ def test_future_rows_do_not_change_historical_features() -> None:
     assert panel_extended == panel_baseline
 
 
+def test_cross_sectional_rank_features_are_centered_and_causal() -> None:
+    snapshot = synthetic_snapshot()
+    calendar = sorted({bar.trade_date for bar in snapshot.records})
+    midpoint = calendar[len(calendar) // 2]
+
+    full = build_feature_panel(snapshot, feature_transform="cross_sectional_rank")
+    truncated = build_feature_panel(
+        snapshot,
+        as_of=midpoint,
+        feature_transform="cross_sectional_rank",
+    )
+
+    assert truncated == tuple(row for row in full if row.trade_date <= midpoint)
+    latest = [row for row in full if row.trade_date == full[-1].trade_date]
+    for column in range(len(FEATURE_NAMES)):
+        values = [row.values[column] for row in latest]
+        assert sum(values) / len(values) == pytest.approx(0.0, abs=1e-12)
+        assert min(values) >= -0.5
+        assert max(values) <= 0.5
+
+
 def test_feature_row_width_and_label_horizon_bounds() -> None:
     snapshot = synthetic_snapshot(days=40, symbols=("000001.SZ",))
     bars = sorted(snapshot.records, key=lambda bar: bar.trade_date)
@@ -192,6 +213,39 @@ def test_walk_forward_is_deterministic_and_leak_checked() -> None:
         }
 
     assert run_once() == run_once()
+
+
+def test_walk_forward_accepts_an_explicit_non_overlapping_window() -> None:
+    snapshot = synthetic_snapshot(days=100)
+    documents = contract_documents()
+    calendar = sorted({bar.trade_date for bar in snapshot.records})
+    window = TrainingWindow(
+        train_end=calendar[54],
+        validation_start=calendar[55],
+        validation_end=calendar[69],
+        test_start=calendar[70],
+    )
+
+    _model, _production, report = run_walk_forward(
+        snapshot,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(
+            top_k=4,
+            per_weight=0.24,
+            model_kind="ridge",
+            feature_transform="cross_sectional_rank",
+        ),
+        training_window=window,
+    )
+
+    assert report.train_end == window.train_end
+    assert report.validation_start == window.validation_start
+    assert report.validation_end == window.validation_end
+    assert report.test_start == window.test_start
+    assert report.feature_transform == "cross_sectional_rank"
 
 
 def test_recommendation_labels_cover_buy_hold_sell_watch() -> None:

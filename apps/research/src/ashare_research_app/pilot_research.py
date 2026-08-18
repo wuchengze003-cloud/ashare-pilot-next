@@ -87,6 +87,7 @@ def build_research_report(report, *, initial_capital) -> dict:
         "validation_ic_mean": report.validation_ic_mean,
         "score_orientation": report.score_orientation,
         "model_kind": report.model_kind,
+        "feature_transform": report.feature_transform,
         "top_k": report.top_k,
         "per_weight": report.per_weight,
         "rebalance_interval": report.rebalance_interval,

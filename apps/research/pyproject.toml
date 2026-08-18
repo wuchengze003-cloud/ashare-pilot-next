@@ -9,6 +9,7 @@ dependencies = [
     "numpy>=2.0,<3",
     "pandas>=2.0,<3",
     "scikit-learn>=1.5,<2",
+    "scipy>=1.11,<2",
     "jsonschema[format]>=4.25,<5",
 ]
 
@@ -16,6 +17,8 @@ dependencies = [
 ashare-research-run = "ashare_research_app.pilot_research:main"
 ashare-champion-activate = "ashare_research_app.activate:main"
 ashare-model-race = "ashare_research_app.model_race:main"
+ashare-robustness-race = "ashare_research_app.robustness_race:main"
+ashare-auxiliary-race = "ashare_research_app.auxiliary_race:main"
 
 [tool.uv.sources]
 ashare-quant-core = {workspace = true}
