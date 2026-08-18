@@ -50,6 +50,24 @@ def _validate(document: dict, schema: dict) -> None:
         raise ValueError("contract validation failed: " + errors[0].message)
 
 
+def _validate_execution_dataset_lineage(
+    *,
+    production_signal: dict,
+    dataset_manifest: dict,
+    execution_date: date,
+) -> None:
+    """Require the execution snapshot to directly extend the signal snapshot."""
+    if date.fromisoformat(str(dataset_manifest["as_of"])) != execution_date:
+        raise ValueError("execution dataset manifest as_of must equal execution_date")
+    expected_parent = str(
+        production_signal["contract_set"]["dataset_manifest_sha256"]
+    )
+    if dataset_manifest["parent_manifest_sha256"] != expected_parent:
+        raise ValueError(
+            "execution dataset manifest must directly extend the signal dataset manifest"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Advance one forward-only simulated account")
     parser.add_argument("--contracts-root", required=True)
@@ -83,6 +101,11 @@ def main(argv: list[str] | None = None) -> int:
     execution_date = date.fromisoformat(args.execution_date)
     dataset_manifest = _load_object(Path(args.dataset_manifest))
     _validate(dataset_manifest, schemas["dataset-manifest"])
+    _validate_execution_dataset_lineage(
+        production_signal=production_signal,
+        dataset_manifest=dataset_manifest,
+        execution_date=execution_date,
+    )
     dataset_snapshot = load_dataset_snapshot(
         dataset_manifest=dataset_manifest,
         dataset_root=Path(args.dataset_root),
