@@ -19,7 +19,13 @@ from ashare_research_app import promotion
 from ashare_research_app.backtest import PilotConfig, run_walk_forward
 from ashare_research_app.features import FEATURE_NAMES
 from ashare_research_app.frozen_inference import _load_frozen_package
-from test_ml_champion_chain import ROOT, contract_documents, synthetic_snapshot, write_dataset_files
+from test_ml_champion_chain import (
+    ROOT,
+    contract_documents,
+    permissive_promotion_gate,
+    synthetic_snapshot,
+    write_dataset_files,
+)
 
 
 def promote_and_activate(tmp_path, *, generated_at, activate=True):
@@ -48,6 +54,7 @@ def promote_and_activate(tmp_path, *, generated_at, activate=True):
         top_k=4,
         per_weight=0.24,
         feature_names=FEATURE_NAMES,
+        promotion_gate=permissive_promotion_gate(),
     )
     # Write manifest to a file so tests can pass it to the CLI
     manifest_path = tmp_path / "manifest.json"
@@ -209,6 +216,7 @@ def test_activation_gating_live_uses_previous_champion_until_activated(tmp_path:
         top_k=4,
         per_weight=0.24,
         feature_names=FEATURE_NAMES,
+        promotion_gate=permissive_promotion_gate(),
     )
     assert paths_b.champion_id != paths_a.champion_id
 
@@ -275,6 +283,7 @@ def test_promotion_conflict_does_not_clobber_existing_package(tmp_path: Path) ->
         top_k=4,
         per_weight=0.24,
         feature_names=FEATURE_NAMES,
+        promotion_gate=permissive_promotion_gate(),
     )
     assert again.champion_id == paths.champion_id
 
@@ -293,10 +302,36 @@ def test_promotion_conflict_does_not_clobber_existing_package(tmp_path: Path) ->
             top_k=4,
             per_weight=0.24,
             feature_names=FEATURE_NAMES,
+            promotion_gate=permissive_promotion_gate(),
         )
     # Active pointer is untouched by the failed creation.
     pointer = json.loads((runtime_root / "active-champion.json").read_text())
     assert pointer["champion_id"] == paths.champion_id
+
+
+def test_active_champion_pointer_rejects_path_escape(tmp_path: Path) -> None:
+    promoted_at = datetime(2026, 8, 4, 1, 0, tzinfo=UTC)
+    _snapshot, _dataset_dir, _manifest_path, _paths, runtime_root = promote_and_activate(
+        tmp_path,
+        generated_at=promoted_at,
+    )
+    pointer_path = runtime_root / "active-champion.json"
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    pointer["champion_id"] = "../../outside"
+    pointer_path.write_text(
+        json.dumps(pointer, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="champion id is invalid"):
+        _load_frozen_package(runtime_root)
+
+    with pytest.raises(promotion.ChampionPackageError, match="champion id is invalid"):
+        promotion.activate_champion(
+            runtime_root=runtime_root,
+            champion_id="../../outside",
+            activated_at=promoted_at,
+        )
 
 
 def test_verify_signal_binding_detects_stale_dataset_champion_and_as_of() -> None:

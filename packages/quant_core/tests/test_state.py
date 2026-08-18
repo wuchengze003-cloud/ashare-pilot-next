@@ -4,6 +4,7 @@ from ashare_quant_core import (
     HealthSnapshot,
     RiskAction,
     RuntimeState,
+    constrain_execution_targets,
     resolve_state,
 )
 
@@ -39,3 +40,26 @@ def snapshot(**overrides: object) -> HealthSnapshot:
 )
 def test_state_priority(health: HealthSnapshot, expected: RuntimeState) -> None:
     assert resolve_state(health) is expected
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (RuntimeState.ACTIVE, {"000001.SZ": 1000, "600000.SH": 500}),
+        (RuntimeState.HOLD, {"000001.SZ": 300, "600000.SH": 700}),
+        (RuntimeState.REDUCE_ONLY, {"000001.SZ": 300, "600000.SH": 500}),
+        (RuntimeState.FLAT, {"000001.SZ": 0, "600000.SH": 0}),
+    ],
+)
+def test_execution_targets_follow_runtime_state(
+    state: RuntimeState,
+    expected: dict[str, int],
+) -> None:
+    assert (
+        constrain_execution_targets(
+            state=state,
+            desired_shares={"000001.SZ": 1000, "600000.SH": 500},
+            current_shares={"000001.SZ": 300, "600000.SH": 700},
+        )
+        == expected
+    )

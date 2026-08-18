@@ -101,9 +101,7 @@ def load_verified_adapter(
     }
     for field_name, expected in expected_bindings.items():
         if manifest[field_name] != expected:
-            raise AdapterVerificationError(
-                f"adapter {field_name} does not match Champion"
-            )
+            raise AdapterVerificationError(f"adapter {field_name} does not match Champion")
     if _package_sha256(manifest) != manifest["package_sha256"]:
         raise AdapterVerificationError("adapter package_sha256 is invalid")
 
@@ -131,20 +129,23 @@ def load_verified_adapter(
     if not isinstance(config, Mapping):
         raise AdapterVerificationError("adapter config must be an object")
 
-    module = ModuleType(f"_ashare_adapter_{manifest['package_sha256']}")
-    module.__file__ = str(code_path)
-    compiled = compile(code_bytes, str(code_path), "exec")
-    exec(compiled, module.__dict__)
-    factory = module.__dict__.get("build_strategy")
-    if not callable(factory):
-        raise RuntimeError("verified adapter does not export build_strategy")
-    strategy = factory(config)
-    if getattr(strategy, "strategy_id", None) != manifest["strategy_id"]:
-        raise RuntimeError("verified adapter returned the wrong strategy_id")
-    if getattr(strategy, "strategy_version", None) != manifest["strategy_version"]:
-        raise RuntimeError("verified adapter returned the wrong strategy_version")
-    if not callable(getattr(strategy, "target_positions", None)):
-        raise RuntimeError("verified adapter did not return a Strategy")
+    try:
+        module = ModuleType(f"_ashare_adapter_{manifest['package_sha256']}")
+        module.__file__ = str(code_path)
+        compiled = compile(code_bytes, str(code_path), "exec")
+        exec(compiled, module.__dict__)
+        factory = module.__dict__.get("build_strategy")
+        if not callable(factory):
+            raise TypeError("verified adapter does not export build_strategy")
+        strategy = factory(config)
+        if getattr(strategy, "strategy_id", None) != manifest["strategy_id"]:
+            raise TypeError("verified adapter returned the wrong strategy_id")
+        if getattr(strategy, "strategy_version", None) != manifest["strategy_version"]:
+            raise TypeError("verified adapter returned the wrong strategy_version")
+        if not callable(getattr(strategy, "target_positions", None)):
+            raise TypeError("verified adapter did not return a Strategy")
+    except Exception as exc:
+        raise AdapterVerificationError("verified adapter failed to initialize") from exc
 
     return VerifiedAdapter(
         strategy=strategy,

@@ -15,6 +15,21 @@ ACCOUNT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 STATE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,159}$")
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_durable(path: Path, payload: bytes) -> None:
+    with path.open("wb") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def _account_root(runtime_root: Path, account_id: str) -> Path:
     if not ACCOUNT_ID.fullmatch(account_id):
         raise ValueError("invalid simulated account id")
@@ -41,6 +56,9 @@ def load_current_account_state(
     if head_path.is_symlink():
         raise ValueError("simulated account head must not be a symlink")
     if not head_path.exists():
+        runs_root = root / "runs"
+        if runs_root.exists() and any(runs_root.iterdir()):
+            raise ValueError("simulated account head is missing while account runs still exist")
         return None
     head_bytes = head_path.read_bytes()
     import json
@@ -85,6 +103,8 @@ def commit_account_state(
     runs_root = root / "runs"
     root.mkdir(parents=True, exist_ok=True)
     runs_root.mkdir(parents=True, exist_ok=True)
+    _fsync_directory(root.parent)
+    _fsync_directory(root)
     lock_path = root / ".publish.lock"
     with lock_path.open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -117,9 +137,11 @@ def commit_account_state(
             if staging.exists():
                 raise ValueError("simulated account staging path already exists")
             staging.mkdir()
-            (staging / "state.json").write_bytes(state_bytes)
-            (staging / "COMMITTED").write_text(state_sha256, encoding="ascii")
+            _write_durable(staging / "state.json", state_bytes)
+            _write_durable(staging / "COMMITTED", state_sha256.encode("ascii"))
+            _fsync_directory(staging)
             os.replace(staging, final_dir)
+            _fsync_directory(runs_root)
 
         head = {
             "contract_id": "simulated-account-head",
@@ -133,6 +155,7 @@ def commit_account_state(
             "generated_at": str(document["generated_at"]),
         }
         temporary_head = root / f".current-state-{os.getpid()}.json"
-        temporary_head.write_bytes(canonical_json_bytes(head))
+        _write_durable(temporary_head, canonical_json_bytes(head))
         os.replace(temporary_head, root / "current-state.json")
+        _fsync_directory(root)
         return final_dir

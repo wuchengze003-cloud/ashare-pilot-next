@@ -9,6 +9,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -24,6 +25,19 @@ from ashare_research_app.backtest import PilotConfig, run_walk_forward
 from ashare_research_app.features import FEATURE_NAMES
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def permissive_promotion_gate() -> dict:
+    return {
+        "contract_id": "promotion-gate",
+        "schema_version": "1.0.0",
+        "gate_id": "synthetic-test-promotion/v1",
+        "maximum_drawdown": 1.0,
+        "minimum_trades": 1,
+        "minimum_sharpe": -100.0,
+        "maximum_top_trade_profit_share": 1.0,
+        "require_untouched_final_window": True,
+    }
 
 
 def trading_days(start: date, count: int) -> list[date]:
@@ -75,7 +89,7 @@ def synthetic_snapshot(*, days: int = 80) -> DatasetSnapshot:
             )
             price = close_price
     return DatasetSnapshot(
-        dataset_id="synthetic-chain/v1",
+        dataset_id="synthetic-chain-2023-09-20",
         dataset_family_id="synthetic-chain/v1",
         manifest_sha256="b" * 64,
         as_of=calendar[-1],
@@ -252,6 +266,7 @@ def test_promotion_feeds_live_signal_chain(tmp_path: Path) -> None:
         top_k=4,
         per_weight=0.24,
         feature_names=FEATURE_NAMES,
+        promotion_gate=permissive_promotion_gate(),
     )
 
     signal = run_pilot_command(
@@ -314,13 +329,12 @@ def test_promotion_report_binds_leak_checks(tmp_path: Path) -> None:
         top_k=4,
         per_weight=0.24,
         feature_names=FEATURE_NAMES,
+        promotion_gate=permissive_promotion_gate(),
     )
     champion = json.loads(paths.champion_path.read_text(encoding="utf-8"))
     promotion_report = json.loads(paths.promotion_report_path.read_text(encoding="utf-8"))
 
-    assert champion["promotion_report_sha256"] == promotion.canonical_json_sha256(
-        promotion_report
-    )
+    assert champion["promotion_report_sha256"] == promotion.canonical_json_sha256(promotion_report)
     statuses = {check["check_id"]: check["status"] for check in promotion_report["leak_checks"]}
     assert statuses["temporal_split_monotonic"] == "pass"
     assert statuses["feature_pit_truncation_invariant"] == "pass"
@@ -329,3 +343,74 @@ def test_promotion_report_binds_leak_checks(tmp_path: Path) -> None:
         promotion_report["metrics"]["total_return"], abs=1e-9
     )
     assert paths.model_bundle_path.is_file()
+    assert paths.promotion_report_path.parent == paths.package_dir
+    assert promotion_report["promotion_gate_evaluation"]["status"] == "pass"
+    adapter_source = next(paths.adapter_root.rglob("adapter.py")).read_text(encoding="utf-8")
+    assert "ordered[-1].trade_date != as_of" in adapter_source
+
+
+def test_promotion_rejects_failed_gate_before_writing_a_package(tmp_path: Path) -> None:
+    snapshot = synthetic_snapshot()
+    manifest = write_dataset_files(snapshot, tmp_path / "dataset")
+    documents = contract_documents()
+    _model, production_model, report = run_walk_forward(
+        snapshot,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(top_k=4, per_weight=0.24),
+    )
+    failed_report = replace(
+        report,
+        metrics={**report.metrics, "max_drawdown": 2.0},
+    )
+    runtime_root = tmp_path / "runtime"
+
+    with pytest.raises(promotion.ChampionPackageError, match="promotion gate failed"):
+        promotion.promote_baseline_model(
+            repository_root=ROOT,
+            runtime_root=runtime_root,
+            model_bundle_bytes=production_model.bundle_bytes(),
+            report=failed_report,
+            dataset_manifest=manifest,
+            snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
+            as_of=snapshot.as_of.isoformat(),
+            generated_at=datetime(2026, 8, 4, 1, 0, tzinfo=UTC),
+            top_k=4,
+            per_weight=0.24,
+            feature_names=FEATURE_NAMES,
+            promotion_gate=permissive_promotion_gate(),
+        )
+
+    assert not runtime_root.exists()
+
+
+def test_promotion_rejects_bundle_not_bound_to_backtest(tmp_path: Path) -> None:
+    snapshot = synthetic_snapshot()
+    manifest = write_dataset_files(snapshot, tmp_path / "dataset")
+    documents = contract_documents()
+    _model, _production_model, report = run_walk_forward(
+        snapshot,
+        cost_model_doc=documents["cost-model"],
+        market_rules_doc=documents["market-rules"],
+        execution_policy_doc=documents["execution-policy"],
+        portfolio_risk_doc=documents["portfolio-risk"],
+        config=PilotConfig(top_k=4, per_weight=0.24),
+    )
+
+    with pytest.raises(promotion.ChampionPackageError, match="model bundle"):
+        promotion.promote_baseline_model(
+            repository_root=ROOT,
+            runtime_root=tmp_path / "runtime",
+            model_bundle_bytes=b"not-the-evaluated-model",
+            report=report,
+            dataset_manifest=manifest,
+            snapshot_symbols=tuple(sorted({bar.symbol for bar in snapshot.records})),
+            as_of=snapshot.as_of.isoformat(),
+            generated_at=datetime(2026, 8, 4, 1, 0, tzinfo=UTC),
+            top_k=4,
+            per_weight=0.24,
+            feature_names=FEATURE_NAMES,
+            promotion_gate=permissive_promotion_gate(),
+        )

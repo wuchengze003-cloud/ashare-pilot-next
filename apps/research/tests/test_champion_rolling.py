@@ -48,6 +48,8 @@ def test_every_refit_uses_only_labels_mature_by_the_refit_date() -> None:
         assert pd.Timestamp(card["max_label_end"]) <= pd.Timestamp(card["refit_date"])
         assert pd.Timestamp(card["train_end"]) < pd.Timestamp(card["valid_start"])
         assert card["label_horizon"] == 5
+        assert card["metric_applies_to"] == "evaluation_model"
+        assert card["production_model_fit_scope"] == "mature_train_plus_validation"
 
 
 def test_future_labels_cannot_change_an_already_refitted_prediction() -> None:
@@ -60,7 +62,7 @@ def test_future_labels_cannot_change_an_already_refitted_prediction() -> None:
     changed = prepared.copy()
     future = changed["_label_end_date"] > first_refit
     assert future.any()
-    changed.loc[future, "_label"] = changed.loc[future, "_label"] * -1000.0 + 77.0
+    changed.loc[future, "_fwd"] = changed.loc[future, "_fwd"] * -1000.0 + 77.0
     replay = rolling_gbdt(
         changed,
         panel,
@@ -73,6 +75,74 @@ def test_future_labels_cannot_change_an_already_refitted_prediction() -> None:
 
     np.testing.assert_array_equal(original_symbols, replay_symbols)
     np.testing.assert_allclose(original_scores, replay_scores, rtol=0.0, atol=0.0)
+
+
+def test_unmatured_peer_price_cannot_change_a_mature_training_label() -> None:
+    rows = [
+        {
+            "symbol": "A",
+            "trade_date": "2026-01-01",
+            "close": 10.0,
+            "feature_a": 1.0,
+            "feature_b": 1.0,
+        },
+        {
+            "symbol": "A",
+            "trade_date": "2026-01-02",
+            "close": 11.0,
+            "feature_a": 1.0,
+            "feature_b": 1.0,
+        },
+        {
+            "symbol": "A",
+            "trade_date": "2026-01-03",
+            "close": 12.0,
+            "feature_a": 1.0,
+            "feature_b": 1.0,
+        },
+        {
+            "symbol": "B",
+            "trade_date": "2026-01-01",
+            "close": 20.0,
+            "feature_a": 1.0,
+            "feature_b": 1.0,
+        },
+        {
+            "symbol": "B",
+            "trade_date": "2026-01-02",
+            "close": 20.0,
+            "feature_a": 1.0,
+            "feature_b": 1.0,
+        },
+        {
+            "symbol": "B",
+            "trade_date": "2026-01-04",
+            "close": 20.0,
+            "feature_a": 1.0,
+            "feature_b": 1.0,
+        },
+    ]
+    panel = pd.DataFrame(rows)
+    panel["trade_date"] = pd.to_datetime(panel["trade_date"])
+    changed = panel.copy()
+    changed.loc[
+        (changed["symbol"] == "B") & (changed["trade_date"] == pd.Timestamp("2026-01-04")),
+        "close",
+    ] = 40.0
+
+    from ashare_research_app.champion import _mature_relative_labels
+
+    before = _mature_relative_labels(
+        _prepare_forward_labels(panel, FEATURES, horizon=2),
+        cutoff=pd.Timestamp("2026-01-03"),
+    )
+    after = _mature_relative_labels(
+        _prepare_forward_labels(changed, FEATURES, horizon=2),
+        cutoff=pd.Timestamp("2026-01-03"),
+    )
+
+    assert before.loc[before["symbol"] == "A", "_label"].iloc[0] == 0.0
+    assert after.loc[after["symbol"] == "A", "_label"].iloc[0] == 0.0
 
 
 def test_last_mature_model_scores_the_latest_feature_date() -> None:

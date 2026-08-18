@@ -11,7 +11,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from math import fsum
 
 from .costs import CostBreakdown, calculate_cost
 from .snapshots import SYMBOL_PATTERN
@@ -345,10 +344,10 @@ def mark_to_market(
     prices: Mapping[str, float],
 ) -> Decimal:
     """Value holdings at explicit prices; missing prices fail closed."""
-    values: list[float] = []
+    invested = Decimal("0")
     for symbol, holding in sorted(state.holdings.items()):
         price = prices.get(symbol)
         if price is None or price <= 0:
             raise SimulatedExecutionError(f"missing mark price for {symbol}")
-        values.append(holding.shares * price)
-    return state.cash + Decimal(str(fsum(values)))
+        invested += Decimal(holding.shares) * Decimal(str(price))
+    return state.cash + invested
