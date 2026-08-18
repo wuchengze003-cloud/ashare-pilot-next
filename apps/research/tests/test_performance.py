@@ -31,4 +31,3 @@ def test_returns_reject_invalid_nav_values(bad_nav: float) -> None:
 def test_sharpe_rejects_non_finite_returns() -> None:
     with pytest.raises(ValueError, match="finite"):
         annualized_sharpe((0.01, math.nan))
-
